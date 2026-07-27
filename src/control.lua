@@ -59,8 +59,13 @@ script.on_init(init_storage)
 script.on_configuration_changed(function()
     init_storage()
     for _, s in pairs(storage.autodig.players) do
-        if s.enemy_count == nil then s.enemy_count = 0 end
+        -- next_tick 一定要有值:ready_to_dig 拿它跟 game.tick 做 < 比較,nil 會直接報錯。
         if s.next_tick == nil then s.next_tick = 0 end
+        -- enemy_count 刻意「不」補值。nil 在這裡是有意義的哨兵,代表「還沒抓到基準,
+        -- 第一次挖不要比較」,而 Lua 分不出「欄位不存在」和「欄位存在但是 nil」——
+        -- 補成 0 會把哨兵變成「基準是 0 隻敵人」,於是玩家旁邊本來就有怪的時候,
+        -- 下一次挖掘會誤判成敵人增加而自我關閉。舊存檔缺這個欄位時讀到 nil,
+        -- 那正好就是安全的預設值。
     end
 end)
 
