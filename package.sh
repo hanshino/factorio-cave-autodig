@@ -25,7 +25,7 @@ rm -rf build dist
 mkdir -p "build/$DIR" dist
 # 白名單複製,不用 cp -r。locale-mod 有過把工具的暫存目錄掃進 zip 差點發布出去
 # 的紀錄,所以這裡明確列出要帶什麼。
-cp src/info.json src/data.lua src/settings.lua src/control.lua src/logic.lua "build/$DIR/"
+cp src/info.json src/data.lua src/settings.lua src/control.lua src/logic.lua src/gui.lua "build/$DIR/"
 mkdir -p "build/$DIR/locale/en" "build/$DIR/locale/zh-TW"
 cp src/locale/en/*.cfg "build/$DIR/locale/en/"
 cp src/locale/zh-TW/*.cfg "build/$DIR/locale/zh-TW/"

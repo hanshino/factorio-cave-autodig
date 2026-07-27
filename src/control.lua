@@ -1,6 +1,7 @@
 -- Factorio 事件接線層。所有決策邏輯都在 logic.lua,這裡只負責把世界狀態摘要
 -- 成純資料、呼叫 logic、再把結果變成 API 呼叫。
 local logic = require("logic")
+local autodig_gui = require("gui")
 
 -- logic.lua 為了保持可測而把方向值寫成字面數字。這裡驗證引擎的 defines 真的
 -- 是那些值 —— 萬一未來 Factorio 改了編號,這個錯誤會在載入時就炸出來,而不是
@@ -67,11 +68,20 @@ script.on_configuration_changed(function()
         -- 下一次挖掘會誤判成敵人增加而自我關閉。舊存檔缺這個欄位時讀到 nil,
         -- 那正好就是安全的預設值。
     end
+
+    -- mod 更新後舊的 GUI 元素可能結構不同,直接砍掉重建最省事。
+    for _, player in pairs(game.players) do
+        autodig_gui.destroy(player)
+        autodig_gui.build(player)
+    end
 end)
 
 script.on_event(defines.events.on_player_created, function(event)
     local player = game.get_player(event.player_index)
-    if player then state_for(event.player_index).mode = default_mode(player) end
+    if player then
+        state_for(event.player_index).mode = default_mode(player)
+        autodig_gui.build(player)
+    end
 end)
 
 script.on_event(defines.events.on_player_removed, function(event)
@@ -97,6 +107,7 @@ script.on_event("autodig-toggle", function(event)
     else
         player.print({ "autodig.disabled" })
     end
+    autodig_gui.refresh(player, s)
 end)
 
 script.on_event("autodig-cycle-mode", function(event)
@@ -105,13 +116,18 @@ script.on_event("autodig-cycle-mode", function(event)
     local s = state_for(event.player_index)
     s.mode = (s.mode == MODES[1]) and MODES[2] or MODES[1]
     player.print({ "autodig.mode-switched", mode_label(s.mode) })
+    autodig_gui.refresh(player, s)
 end)
 
 local COVER = { ["diggy-rock"] = true, ["diggy-rubble"] = true }
 
+-- 每個 stop 路徑都經過這裡,所以面板刷新放在這裡一次做完,而不是要求每個
+-- 呼叫端自己記得呼叫 —— 現在有兩個呼叫點,Task 10 還會再加兩個,漏掉一次
+-- 就會讓面板顯示「挖掘中」但其實已經停了。
 local function stop(player, s, reason_key, ...)
     s.enabled = false
     player.print({ reason_key, ... })
+    autodig_gui.refresh(player, s)
 end
 
 -- 角色的有效採礦速度。基礎值來自角色原型(原版是 0.5),再加上角色本身和
@@ -186,5 +202,34 @@ script.on_event(defines.events.on_tick, function()
                 stop(player, s, "autodig.stopped-no-character")
             end
         end
+    end
+end)
+
+script.on_event(defines.events.on_gui_click, function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    autodig_gui.on_click(player, state_for(event.player_index), event.element)
+end)
+
+script.on_event(defines.events.on_gui_checked_state_changed, function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    local s = state_for(event.player_index)
+    local handled, power_changed = autodig_gui.on_checkbox(player, s, event.element)
+    if power_changed then
+        -- 與熱鍵開啟時完全相同的重置,否則從 GUI 開啟會少做這些事。
+        s.next_tick = 0
+        s.last_walk_tick = nil
+        s.enemy_count = nil
+    end
+    if handled then autodig_gui.refresh(player, s) end
+end)
+
+script.on_event(defines.events.on_gui_selection_state_changed, function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    local s = state_for(event.player_index)
+    if autodig_gui.on_selection(player, s, event.element) then
+        autodig_gui.refresh(player, s)
     end
 end)
