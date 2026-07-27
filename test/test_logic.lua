@@ -181,6 +181,13 @@ eq(blocked{ enemy_count = 1, enemy_guard = false }, nil, "關掉警戒就不擋"
 eq(blocked{ enemy_count = 0, prev_enemy_count = 5 }, nil, "敵人變少不擋")
 eq(blocked{ stress = 3.5, enemy_count = 1 }, "stress", "壓力優先於敵人回報")
 
+-- ── MODES ─────────────────────────────────────────────────────────────
+-- 這份清單是 control.lua 與 gui.lua 的共同來源,也必須與 settings.lua 的
+-- allowed_values 一致。把它釘住,免得有人改了其中一邊。
+eq(#logic.MODES, 2, "目前只有兩種模式")
+eq(logic.MODES[1], "forward", "第一個模式是 forward(也是預設)")
+eq(logic.MODES[2], "cursor", "第二個模式是 cursor")
+
 -- ── logic.lua 必須零 Factorio 依賴 ────────────────────────────────────
 -- 這個檔案的存在理由就是「可以在 Factorio 外面測」。一旦有人在裡面用了 game
 -- 或 storage,測試就再也跑不起來,而且會是在遊戲裡才發現。用原始碼掃描把這條

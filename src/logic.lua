@@ -7,6 +7,13 @@
 -- 執行這條規則。
 local logic = {}
 
+-- 模式清單的唯一來源。control.lua 的熱鍵輪替和 gui.lua 的下拉選單都讀這裡 ——
+-- 兩邊各自寫一份字面量的話,將來新增模式時漏改一邊會讓熱鍵和 GUI 對「現在是
+-- 哪個模式」各說各話,而且不會有任何錯誤訊息。
+-- 順序有意義:熱鍵是在這個清單裡循環,而 settings.lua 的 allowed_values
+-- 必須與這裡一致。
+logic.MODES = { "forward", "cursor" }
+
 -- Factorio 2.0 的 defines.direction 是 16 方向,north=0,順時針每 22.5 度 +1。
 -- 角色行走只會產生 8 個偶數值,所以這裡只收偶數。
 -- 刻意寫成字面數字來保持這個檔案的純淨;control.lua 載入時會斷言引擎的

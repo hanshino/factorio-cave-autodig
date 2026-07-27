@@ -24,8 +24,6 @@ local function assert_direction_defines()
 end
 assert_direction_defines()
 
-local MODES = { "forward", "cursor" }
-
 local function default_mode(player)
     return settings.get_player_settings(player)["autodig-default-mode"].value
 end
@@ -114,7 +112,7 @@ script.on_event("autodig-cycle-mode", function(event)
     local player = game.get_player(event.player_index)
     if not player then return end
     local s = state_for(event.player_index)
-    s.mode = (s.mode == MODES[1]) and MODES[2] or MODES[1]
+    s.mode = (s.mode == logic.MODES[1]) and logic.MODES[2] or logic.MODES[1]
     player.print({ "autodig.mode-switched", mode_label(s.mode) })
     autodig_gui.refresh(player, s)
 end)

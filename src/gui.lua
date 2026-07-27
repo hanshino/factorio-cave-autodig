@@ -1,11 +1,12 @@
 -- 自動挖掘的控制面板。所有參數直接讀寫 mod 設定,不另外存一份 ——
 -- 這樣 GUI 和 Factorio 內建的設定介面永遠一致。只有 enabled 存在 storage,
 -- 因為那是執行狀態不是偏好。
+local logic = require("logic")
+
 local gui = {}
 
 local TOP_BUTTON = "autodig-open"
 local PANEL = "autodig-panel"
-local MODES = { "forward", "cursor" }
 local WIDTHS = { 1, 3 }
 
 local function user_setting(player, name)
@@ -62,13 +63,13 @@ local function build_panel(player, state)
     }
 
     local mode_items = {}
-    for i, m in ipairs(MODES) do mode_items[i] = { "autodig.mode-" .. m } end
+    for i, m in ipairs(logic.MODES) do mode_items[i] = { "autodig.mode-" .. m } end
     frame.add { type = "label", caption = { "autodig.gui-mode" } }
     frame.add {
         type = "drop-down",
         name = "autodig-mode",
         items = mode_items,
-        selected_index = index_of(MODES, state.mode),
+        selected_index = index_of(logic.MODES, state.mode),
     }
 
     local width_items = {}
@@ -104,7 +105,7 @@ function gui.refresh(player, state)
     local frame = player.gui.screen[PANEL]
     if not frame then return end
     frame["autodig-power"].state = state.enabled
-    frame["autodig-mode"].selected_index = index_of(MODES, state.mode)
+    frame["autodig-mode"].selected_index = index_of(logic.MODES, state.mode)
     local key = "autodig.gui-state-off"
     if state.enabled then
         key = "autodig.gui-state-running"
@@ -142,7 +143,7 @@ end
 
 function gui.on_selection(player, state, element)
     if element.name == "autodig-mode" then
-        state.mode = MODES[element.selected_index] or MODES[1]
+        state.mode = logic.MODES[element.selected_index] or logic.MODES[1]
         return true
     elseif element.name == "autodig-width" then
         set_user_setting(player, "autodig-tunnel-width",
