@@ -37,6 +37,9 @@ echo "==> 載入測試(headless 建一張新地圖,確認原型與依賴沒問�
 # 注意:這只證明 data 階段和依賴解析沒問題,證明不了任何 runtime 行為 ——
 # 無頭伺服器沒有角色,自動挖掘的行為只能靠實機驗證。
 LOADTEST=$(mktemp -d)
+# set -e 會在 docker run 失敗的當下就中止腳本,所以清理必須掛在 EXIT 上。
+# 寫在 if 分支裡的 rm 在「真的失敗」時永遠跑不到 —— 那正是最需要清理的時候。
+trap 'rm -rf "$LOADTEST"' EXIT
 cp "$OUT" "$LOADTEST/"
 for m in ../_data/mods/the-cave_*.zip; do cp "$m" "$LOADTEST/"; done
 # --entrypoint 覆蓋掉映像檔預設的 /docker-entrypoint.sh。那支腳本不是「你的指令
@@ -45,15 +48,16 @@ for m in ../_data/mods/the-cave_*.zip; do cp "$m" "$LOADTEST/"; done
 # 於是 /mods/mod-list.json 的擁有者跟 host 掛進來的目錄對不上,直接
 # Permission denied。直接指到二進位檔可以跳過那整套設置,乾淨地跑一次性的
 # --create。
-docker run --rm -v "$LOADTEST:/mods" --entrypoint /opt/factorio/bin/x64/factorio \
-    factoriotools/factorio:2.0.77 \
-    --mod-directory /mods --create /tmp/loadtest.zip 2>&1 | tee "$LOADTEST/out.log"
-if grep -qiE "error|failed to load" "$LOADTEST/out.log"; then
-    echo "!! 載入測試失敗,看上面的輸出"
-    rm -rf "$LOADTEST"
+if ! docker run --rm --entrypoint /opt/factorio/bin/x64/factorio \
+    -v "$LOADTEST:/mods" factoriotools/factorio:2.0.77 \
+    --mod-directory /mods --create /tmp/loadtest.zip 2>&1 | tee "$LOADTEST/out.log"; then
+    echo "!! 載入測試失敗:factorio 以非零狀態結束,看上面的輸出"
     exit 1
 fi
-rm -rf "$LOADTEST"
+if grep -qiE "error|failed to load" "$LOADTEST/out.log"; then
+    echo "!! 載入測試失敗:輸出裡有錯誤訊息,看上面"
+    exit 1
+fi
 echo "==> 載入測試通過"
 
 if [[ "${1:-}" == "--install" ]]; then

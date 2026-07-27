@@ -12,8 +12,11 @@ local function assert_direction_defines()
     }
     for name, value in pairs(expected) do
         if defines.direction[name] ~= value then
+            -- 這則訊息刻意不走 locale:error() 收不了 LocalisedString,而且它在
+            -- 載入階段就中止 mod,玩家永遠看不到。用英文是因為這個 mod 會發布到
+            -- mod portal,讀到這段崩潰訊息的人不一定看得懂中文。
             error(string.format(
-                "hanshino-cave-autodig: defines.direction.%s 是 %s,但 logic.lua 假設是 %d",
+                "hanshino-cave-autodig: defines.direction.%s is %s but logic.lua assumes %d",
                 name, tostring(defines.direction[name]), value))
         end
     end
