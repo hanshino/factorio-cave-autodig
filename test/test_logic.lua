@@ -130,6 +130,57 @@ eq(#logic.forward_candidates(10, 10, 99, 1), 0, "無效方向值回傳空清單"
 eq_points(logic.forward_candidates(10, 10, 1, 1), { { x = 10, y = 9 } },
     "方向 1 吸附成 north")
 
+-- ── ready_to_dig ──────────────────────────────────────────────────────
+local function ready(over)
+    local s = { enabled = true, has_character = true, tick = 100, next_tick = 100 }
+    for k, v in pairs(over or {}) do s[k] = v end
+    return logic.ready_to_dig(s)
+end
+eq(ready(), true, "全部就緒時可以挖")
+eq(ready{ enabled = false }, false, "沒開啟就不挖")
+eq(ready{ has_character = false }, false, "沒有角色就不挖(遠端視角、觀察者、死亡)")
+eq(ready{ tick = 99 }, false, "冷卻還沒到不挖")
+eq(ready{ tick = 101 }, true, "冷卻過了可以挖")
+
+-- ── latch_direction ───────────────────────────────────────────────────
+-- walking_state.direction 只在 walking == true 時有效(官方文件明載),
+-- 站著不動時那個值不可信,所以必須自己記住最後一次有效的方向。
+eq(logic.latch_direction(0, true, 4), 4, "行走中就更新成當前方向")
+eq(logic.latch_direction(0, false, 8), 0, "沒在走時保留舊值,不信任當前方向")
+eq(logic.latch_direction(nil, true, 4), 4, "第一次有方向就記住")
+eq(logic.latch_direction(4, false, nil), 4, "沒在走且方向為 nil 時保留舊值")
+eq(logic.latch_direction(4, true, nil), 4, "行走中但方向為 nil 也保留舊值")
+
+-- ── walk_active ───────────────────────────────────────────────────────
+-- 前進模式需要知道「玩家現在是不是在往某個方向推」。理論上撞牆時
+-- walking_state.walking 仍為 true(它反映輸入意圖不是實際位移),但這個假設
+-- 若錯了整個前進模式就不會動。寬限期讓行為在兩種情況下都正確。
+eq(logic.walk_active(100, 100, 30), true, "這一 tick 正在走")
+eq(logic.walk_active(130, 100, 30), true, "寬限期邊界內仍算在走")
+eq(logic.walk_active(131, 100, 30), false, "超過寬限期就不算")
+eq(logic.walk_active(100, nil, 30), false, "從來沒走過就不算")
+
+-- ── blocked_reason ────────────────────────────────────────────────────
+local function blocked(over)
+    local s = {
+        collapse_enabled = true, stress = 1.0, stress_margin = 3.0,
+        enemy_guard = true, enemy_count = 0, prev_enemy_count = 0,
+    }
+    for k, v in pairs(over or {}) do s[k] = v end
+    return logic.blocked_reason(s)
+end
+eq(blocked(), nil, "一切正常時不擋")
+eq(blocked{ stress = 3.0 }, "stress", "壓力達到邊界就擋(邊界是含的)")
+eq(blocked{ stress = 3.5 }, "stress", "壓力超過邊界就擋")
+eq(blocked{ stress = 2.99 }, nil, "壓力略低於邊界不擋")
+eq(blocked{ stress = 3.5, collapse_enabled = false }, nil,
+    "the-cave 關掉塌陷時整道閘跳過")
+eq(blocked{ stress = nil }, nil, "探針拿不到值時不擋(介面壞掉已另外警告過)")
+eq(blocked{ enemy_count = 1 }, "enemy", "敵人變多就擋")
+eq(blocked{ enemy_count = 1, enemy_guard = false }, nil, "關掉警戒就不擋")
+eq(blocked{ enemy_count = 0, prev_enemy_count = 5 }, nil, "敵人變少不擋")
+eq(blocked{ stress = 3.5, enemy_count = 1 }, "stress", "壓力優先於敵人回報")
+
 -- ── logic.lua 必須零 Factorio 依賴 ────────────────────────────────────
 -- 這個檔案的存在理由就是「可以在 Factorio 外面測」。一旦有人在裡面用了 game
 -- 或 storage,測試就再也跑不起來,而且會是在遊戲裡才發現。用原始碼掃描把這條

@@ -81,4 +81,41 @@ function logic.forward_candidates(px, py, dir, width)
     }
 end
 
+-- 不需要任何世界查詢的前置判斷。先過這關才值得去做 find_entities_filtered
+-- 和壓力探針那些比較貴的事。
+function logic.ready_to_dig(s)
+    if not s.enabled then return false end
+    if not s.has_character then return false end
+    if s.tick < s.next_tick then return false end
+    return true
+end
+
+-- walking_state.direction 只在 walking == true 時有效(官方文件明載),所以
+-- 必須自己記住最後一次有效的方向。
+function logic.latch_direction(prev, walking, direction)
+    if walking and direction then return direction end
+    return prev
+end
+
+-- 玩家現在是不是在往某個方向推。用寬限期而不是直接看 walking:被牆擋住時
+-- walking_state.walking 理論上仍為 true(它反映的是輸入意圖,不是實際位移),
+-- 但那個假設若錯了前進模式就完全不會動。寬限期讓兩種情況都能正常運作,
+-- 代價只是放開方向鍵後多挖半秒。
+function logic.walk_active(tick, last_walk_tick, grace)
+    if not last_walk_tick then return false end
+    return (tick - last_walk_tick) <= grace
+end
+
+-- 世界查詢做完之後的安全閘。回傳 nil 表示通過,否則回傳停止原因的代號。
+-- 壓力先於敵人回報,因為塌陷會直接壓死玩家,敵人至少還能跑。
+function logic.blocked_reason(s)
+    if s.collapse_enabled and s.stress and s.stress >= s.stress_margin then
+        return "stress"
+    end
+    if s.enemy_guard and s.prev_enemy_count and s.enemy_count > s.prev_enemy_count then
+        return "enemy"
+    end
+    return nil
+end
+
 return logic
