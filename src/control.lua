@@ -106,3 +106,80 @@ script.on_event("autodig-cycle-mode", function(event)
     s.mode = (s.mode == MODES[1]) and MODES[2] or MODES[1]
     player.print({ "autodig.mode-switched", mode_label(s.mode) })
 end)
+
+local COVER = { ["diggy-rock"] = true, ["diggy-rubble"] = true }
+
+local function stop(player, s, reason_key, ...)
+    s.enabled = false
+    player.print({ reason_key, ... })
+end
+
+-- 角色的有效採礦速度。基礎值來自角色原型(原版是 0.5),再加上角色本身和
+-- 勢力的採礦速度加成 —— 科技升級因此會自動反映在自動挖掘的速度上。
+local function mining_speed_for(player)
+    local character = player.character
+    if not character then return nil end
+    local base = character.prototype.mining_speed
+    if not base or base <= 0 then return nil end
+    return base * (1 + player.character_mining_speed_modifier
+                     + player.force.manual_mining_speed_modifier)
+end
+
+-- mining_time 一律從實體原型讀,不寫死。diggy-rock 是 1.5、diggy-rubble 是 1.0,
+-- 但 the-cave 隨時可能改,而且這樣碎石和岩石的不同耗時自動就對了。
+local function cooldown_for(player, entity_name)
+    local proto = prototypes.entity[entity_name]
+    local props = proto and proto.mineable_properties
+    if not props or not props.minable then return nil end
+    return logic.cooldown_ticks(props.mining_time, mining_speed_for(player))
+end
+
+-- 真正動手。回傳 true 表示挖成功(呼叫端據此設冷卻)。
+local function try_dig(player, s, entity)
+    local cooldown = cooldown_for(player, entity.name)
+    if not cooldown then return false end
+    -- 第二參數給 false:東西塞不下時回傳 false,而不是灑一地。
+    if not player.mine_entity(entity, false) then
+        stop(player, s, "autodig.stopped-inventory")
+        return false
+    end
+    s.next_tick = game.tick + cooldown
+    return true
+end
+
+-- 游標模式:滑鼠指著的就是目標。player.selected 是同步的複製狀態
+-- (選取變更是會廣播的 input action,而且有 on_selected_entity_changed 事件),
+-- 所以拿它做決策不會破壞多人的 determinism。
+local function cursor_target(player, include_rubble)
+    local entity = player.selected
+    if not entity or not entity.valid then return nil end
+    if not COVER[entity.name] then return nil end
+    if entity.name == "diggy-rubble" and not include_rubble then return nil end
+    if not player.can_reach_entity(entity) then return nil end
+    return entity
+end
+
+script.on_event(defines.events.on_tick, function()
+    for player_index, s in pairs(storage.autodig.players) do
+        if s.enabled then
+            local player = game.get_player(player_index)
+            if not player then
+                s.enabled = false
+            elseif logic.ready_to_dig({
+                enabled = s.enabled,
+                has_character = player.character ~= nil,
+                tick = game.tick,
+                next_tick = s.next_tick,
+            }) then
+                local user = settings.get_player_settings(player)
+                local include_rubble = user["autodig-include-rubble"].value
+                if s.mode == "cursor" then
+                    local target = cursor_target(player, include_rubble)
+                    if target then try_dig(player, s, target) end
+                end
+            elseif s.enabled and player.character == nil then
+                stop(player, s, "autodig.stopped-no-character")
+            end
+        end
+    end
+end)
