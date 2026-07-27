@@ -21,7 +21,10 @@ already does — it just saves you from doing the click yourself, over and over,
 ### What it does
 
 - **Cursor mode** — point at a rock or a pile of rubble and it keeps digging it, like holding
-  the mouse button down on it. This is the only mode the mod actually digs in today.
+  the mouse button down on it.
+- **Forward mode** — hold a movement key into the wall and it digs that direction, one layer
+  at a time, as the wall retreats in front of you. Tunnel width is 1 or 3 tiles; a 3-wide
+  tunnel clears the sides first, so the corridor stays walkable.
 - **Two safety gates**, so it stops itself instead of digging you into trouble while your
   attention is on something else:
   - **Collapse-stress gate** — stops as soon as nearby rock stress approaches The Cave's
@@ -31,9 +34,6 @@ already does — it just saves you from doing the click yourself, over and over,
 - A GUI panel (and two hotkeys — toggle, cycle mode) controls all of the above per player.
   Both gates and the tunnel width can be tuned per player; the collapse-stress limit is a
   server-wide setting.
-
-Forward mode (push a movement key into a wall and it digs that direction) is planned for a
-future release. It is selectable in the mode setting today, but does not dig anything yet.
 
 ### Requirements
 

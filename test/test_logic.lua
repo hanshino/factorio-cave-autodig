@@ -74,8 +74,9 @@ local c, d = logic.diagonal_components(14)
 eq(c, 12, "northwest 的第一分量是 west")
 eq(d, 0, "northwest 的第二分量是 north(要繞回 0,不是 16)")
 
--- 邊界防呆:與 snap_direction / cooldown_ticks 同一種姿態,非數字回傳安全值
--- 而不是讓 dir % 4 之類的算術直接炸出 error。
+-- 邊界防呆:非數字回傳安全值,而不是讓 dir % 4 之類的算術直接炸出 error。
+-- 這換來的是更早、更好讀的失敗點,不是跟 snap_direction / cooldown_ticks
+-- 完全一樣的保證——理由見 logic.lua 裡這兩個函式上面的註解。
 eq(logic.is_diagonal(nil), false, "is_diagonal(nil) 回傳 false 而不是爆炸")
 eq(logic.is_diagonal("north"), false, "is_diagonal 對非數字回傳 false")
 local e, f = logic.diagonal_components(nil)
@@ -181,9 +182,10 @@ eq(logic.latch_direction(4, true, 0), 0, "方向為 0(north)時要真的採信,�
 eq(logic.latch_direction(0, false, 4), 0, "上次 latch 住的方向是 0 時,沒在走要能正確保留這個 0")
 
 -- ── walk_active ───────────────────────────────────────────────────────
--- 前進模式需要知道「玩家現在是不是在往某個方向推」。理論上撞牆時
--- walking_state.walking 仍為 true(它反映輸入意圖不是實際位移),但這個假設
--- 若錯了整個前進模式就不會動。寬限期讓行為在兩種情況下都正確。
+-- 前進模式需要知道「玩家現在是不是在往某個方向推」。撞牆時
+-- walking_state.walking 已經實機驗證過仍為 true(它反映輸入意圖不是實際
+-- 位移)。寬限期不是那次驗證的保險,而是一項獨立需求:放開方向鍵之後,
+-- 自動挖掘要在半秒內停下來,不能無限期黏著最後一個方向繼續挖。
 eq(logic.walk_active(100, 100, 30), true, "這一 tick 正在走")
 eq(logic.walk_active(130, 100, 30), true, "寬限期邊界內仍算在走")
 eq(logic.walk_active(131, 100, 30), false, "超過寬限期就不算")
@@ -221,7 +223,7 @@ eq(blocked{ stress = 3.5, enemy_count = 1 }, "stress", "壓力優先於敵人回
 -- 這份清單是 control.lua 與 gui.lua 的共同來源,也必須與 settings.lua 的
 -- allowed_values 一致。把它釘住,免得有人改了其中一邊。
 eq(#logic.MODES, 2, "目前只有兩種模式")
-eq(logic.MODES[1], "forward", "第一個模式是 forward(尚未實作;settings.lua 的預設值是 cursor)")
+eq(logic.MODES[1], "forward", "第一個模式是 forward(settings.lua 的預設值仍是 cursor,較容易上手,與是否已實作無關)")
 eq(logic.MODES[2], "cursor", "第二個模式是 cursor")
 
 -- ── logic.lua 必須零 Factorio 依賴 ────────────────────────────────────

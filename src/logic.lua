@@ -37,11 +37,18 @@ function logic.snap_direction(dir)
     return dir - (dir % 2)
 end
 
--- 跟 snap_direction / cooldown_ticks 一樣在邊界擋 nil,不讓非數字直接炸出
--- arithmetic error。目前唯一的呼叫端(forward_candidates)在呼叫這兩個函式
--- 之前一定先過 snap_direction 拿到非 nil 的方向,所以這裡的 nil 分支目前
--- 走不到 —— 但用同一種防呆姿態換來的是「以後有人不透過 forward_candidates
--- 直接呼叫」時得到可預期的回傳值,而不是模組內部三個相鄰函式各自一套規矩。
+-- 這裡加的 nil 防呆跟 snap_direction / cooldown_ticks 不是同一種保證 ——
+-- 那兩個的 nil 是「不知道/沒有值」的哨兵,呼叫端看到 nil 就知道要另外處理;
+-- is_diagonal(nil) 回傳 false 跟「這個方向就是正交」是同一個值,呼叫端根本
+-- 分不出差異。這裡買的是別的東西:失敗的時機更早、更便宜、也更好讀。沒有
+-- 這道防呆,diagonal_components(nil) 不會真的不炸,只是把炸點往後挪一行 ——
+-- forward_candidates 接著會拿 nil 去查 DIRECTION_VECTORS[nil](Lua 允許,
+-- 結果是 nil),再對它取 .x 才真正爆炸,錯誤訊息會是「attempt to index a nil
+-- value」而不是這裡的「attempt to perform arithmetic on a nil value」——
+-- 除錯時前者離真正的成因(方向是 nil)更遠。加了防呆之後,模組裡處理方向值
+-- 的四個函式(snap_direction、is_diagonal、diagonal_components、
+-- cooldown_ticks)在呼叫端看起來至少是統一的姿態:遇到爛輸入都直接回傳,
+-- 不會半路噴一個跟輸入本身無關的 Lua 內部錯誤。
 function logic.is_diagonal(dir)
     if type(dir) ~= "number" then return false end
     return dir % 4 == 2
@@ -111,10 +118,10 @@ function logic.latch_direction(prev, walking, direction)
     return prev
 end
 
--- 玩家現在是不是在往某個方向推。用寬限期而不是直接看 walking:被牆擋住時
--- walking_state.walking 理論上仍為 true(它反映的是輸入意圖,不是實際位移),
--- 但那個假設若錯了前進模式就完全不會動。寬限期讓兩種情況都能正常運作,
--- 代價只是放開方向鍵後多挖半秒。
+-- 玩家現在是不是在往某個方向推。撞牆時 walking_state.walking 已經在實機
+-- 驗證過仍為 true(它反映的是輸入意圖,不是實際位移),前進模式因此不能只
+-- 靠 walking 本身判斷玩家是否還想繼續走。寬限期同時也是一項獨立的需求:
+-- 放開方向鍵之後,自動挖掘要在半秒內停下來,不能無限期黏著最後一個方向挖。
 function logic.walk_active(tick, last_walk_tick, grace)
     if not last_walk_tick then return false end
     return (tick - last_walk_tick) <= grace
