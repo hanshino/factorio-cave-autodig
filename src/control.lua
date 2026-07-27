@@ -119,6 +119,11 @@ end)
 
 local COVER = { ["diggy-rock"] = true, ["diggy-rubble"] = true }
 
+local ENEMY_SCAN_RADIUS = 15
+-- 壓力探針的取樣半框。max_in_area 內部以 step 2 掃 cell,所以 ±4 是 5x5 = 25
+-- 個 cell。以每 3 秒一次的挖掘節奏計成本可忽略;真的量到偏重就縮成 ±2。
+local STRESS_PROBE_HALF = 4
+
 -- 每個 stop 路徑都經過這裡,所以面板刷新放在這裡一次做完,而不是要求每個
 -- 呼叫端自己記得呼叫 —— 現在有兩個呼叫點,Task 10 還會再加兩個,漏掉一次
 -- 就會讓面板顯示「挖掘中」但其實已經停了。
@@ -153,11 +158,94 @@ local function cooldown_for(player, entity_name)
     return logic.cooldown_ticks(props.mining_time, mining_speed_for(player))
 end
 
+-- the-cave 的塌陷系統是不是開著。跨 mod 讀 startup setting 是合法的。
+local function collapse_enabled()
+    local setting = settings.startup["the-cave-collapse-mode"]
+    return setting ~= nil and setting.value == "enabled"
+end
+
+-- 向 the-cave 問這一帶目前的最大岩層應力。
+--
+-- 這個 remote 函式在上游被註解成「Headless test hooks (used by the maintainer's
+-- automated benchmarks)」,也就是說它不是穩定的公開 API,隨時可能改名或消失。
+-- 所以:先檢查介面在不在,再 pcall 包住呼叫,壞掉時只關閉這道閘並警告一次,
+-- 絕不讓整個 mod 崩掉。
+local function stress_at(surface, x, y)
+    if not remote.interfaces["diggy-v1"]
+        or not remote.interfaces["diggy-v1"]["debug_max_stress"] then
+        return nil, "missing"
+    end
+    local h = STRESS_PROBE_HALF
+    local ok, value = pcall(remote.call, "diggy-v1", "debug_max_stress",
+        surface.index, x - h, y - h, x + h, y + h)
+    if not ok or type(value) ~= "number" then return nil, "error" end
+    return value
+end
+
+local function enemy_count_near(surface, position)
+    return surface.count_entities_filtered({
+        position = position,
+        radius = ENEMY_SCAN_RADIUS,
+        type = { "unit", "unit-spawner", "turret" },
+        force = "enemy",
+    })
+end
+
+-- 應力探針壞掉時每個 session 只警告一次,不要洗版。
+local function warn_probe_once(player)
+    if storage.autodig.probe_warned then return end
+    storage.autodig.probe_warned = true
+    player.print({ "autodig.probe-unavailable" })
+end
+
 -- 真正動手。回傳 true 表示挖成功(呼叫端據此設冷卻)。
 local function try_dig(player, s, entity)
     local cooldown = cooldown_for(player, entity.name)
     if not cooldown then return false end
-    -- 第二參數給 false:東西塞不下時回傳 false,而不是灑一地。
+
+    local position = entity.position
+    local x, y = math.floor(position.x), math.floor(position.y)
+    local user = settings.get_player_settings(player)
+
+    local gate_collapse = collapse_enabled()
+    local stress, probe_problem
+    if gate_collapse then
+        stress, probe_problem = stress_at(player.surface, x, y)
+        if probe_problem then
+            warn_probe_once(player)
+            -- 探針壞掉就降級成沒有這道閘,而不是停止挖掘。
+            gate_collapse = false
+        end
+    end
+
+    local margin = settings.global["autodig-stress-margin"].value
+    local enemy_guard = user["autodig-enemy-guard"].value
+    local enemies = enemy_guard and enemy_count_near(player.surface, position) or 0
+
+    local reason = logic.blocked_reason({
+        collapse_enabled = gate_collapse,
+        stress = stress,
+        stress_margin = margin,
+        enemy_guard = enemy_guard,
+        enemy_count = enemies,
+        -- 剛開啟時 enemy_count 是 nil,代表「還沒有基準」,這一輪不比較,
+        -- 只把現場的敵人數記下來當基準。否則一開啟就會被本來就在旁邊的怪
+        -- 誤判成新增而立刻自我關閉。
+        prev_enemy_count = s.enemy_count,
+    })
+    -- 基準每輪都更新,包含數量減少的時候 —— 玩家清完怪之後基準要跟著降下來,
+    -- 否則清完場就再也觸發不了警戒。
+    s.enemy_count = enemies
+
+    if reason == "stress" then
+        stop(player, s, "autodig.stopped-stress",
+            string.format("%.2f", stress), string.format("%.2f", margin))
+        return false
+    elseif reason == "enemy" then
+        stop(player, s, "autodig.stopped-enemy")
+        return false
+    end
+
     if not player.mine_entity(entity, false) then
         stop(player, s, "autodig.stopped-inventory")
         return false
