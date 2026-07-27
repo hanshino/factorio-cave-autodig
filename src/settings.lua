@@ -3,7 +3,7 @@ data:extend({
         type = "string-setting",
         setting_type = "runtime-per-user",
         name = "autodig-default-mode",
-        default_value = "forward",
+        default_value = "cursor",
         allowed_values = { "forward", "cursor" },
         order = "a",
     },

@@ -247,6 +247,16 @@ These are the checks a human needs to run at a real Factorio client after `./pac
 installs this build. None of them can be automated — the load test only proves prototypes and
 dependencies resolve, not runtime behavior, since a headless server has no player character.
 
+**Precondition for items 1, 2, 3 and 6 (the stress-gate items):** they require
+`the-cave-collapse-mode = enabled`. This is a **startup** setting, so it needs a server restart
+to take effect, and enabling it turns on real cave collapses — do this on a **throwaway save**,
+never on the live season save. On the production server's current configuration
+(`the-cave-collapse-mode = disabled`, confirmed against `_data/mods/mod-settings.dat`),
+`collapse_enabled()` returns false, `stress_at` is never called, and the whole stress gate
+(including item 6's probe-unavailable warning) is dead code — **the enemy guard (items 4 and 5)
+is the only safety gate actually running there.** Items 4 and 5 need no special setup and can be
+verified on the live server as-is.
+
 1. On an already-cleared, open area near a wall, turn on auto-dig. It should dig only a few
    tiles before printing "應力 X.XX（安全上限 3.00）" ("rock stress X.XX (safety limit 3.00)")
    and stopping.

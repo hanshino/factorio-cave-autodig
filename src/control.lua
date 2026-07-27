@@ -32,13 +32,20 @@ local function state_for(player_index)
     local players = storage.autodig.players
     local s = players[player_index]
     if not s then
+        -- 呼叫端在事件開頭都已經確認過 game.get_player(player_index) 不是 nil,
+        -- 這裡重新拿一次是同一個物件。新 entry 套用玩家的預設模式設定,讓
+        -- mod 安裝前就存在的玩家跟全新玩家拿到一樣的預設值 —— 不能寫死字面量,
+        -- 那樣 settings.lua 的 default_value 跟這裡就是兩個要保持同步的地方。
+        local player = game.get_player(player_index)
         s = {
             enabled = false,
-            mode = "forward",
+            mode = default_mode(player),
             next_tick = 0,
             facing = nil,          -- latch 的最後有效行走方向
             last_walk_tick = nil,  -- 最後一次 walking_state.walking 為真的 tick
-            enemy_count = 0,       -- 上次掃描到的附近敵人數
+            -- nil 是有意義的哨兵,代表「還沒有基準」,不是省略初始值。
+            -- 見 blocked_reason 和 try_dig 裡對這個欄位的說明。
+            enemy_count = nil,
         }
         players[player_index] = s
     end
@@ -77,7 +84,9 @@ end)
 script.on_event(defines.events.on_player_created, function(event)
     local player = game.get_player(event.player_index)
     if player then
-        state_for(event.player_index).mode = default_mode(player)
+        -- state_for 現在會自己在建立新 entry 時讀取玩家的預設模式設定,
+        -- 這裡不用再重複賦值一次。
+        state_for(event.player_index)
         autodig_gui.build(player)
     end
 end)
@@ -96,7 +105,9 @@ script.on_event("autodig-toggle", function(event)
     local s = state_for(event.player_index)
     s.enabled = not s.enabled
     if s.enabled then
-        s.next_tick = 0
+        -- next_tick 刻意不歸零。歸零等於允許連按兩次熱鍵就把冷卻繞過去,
+        -- 立刻再挖一次 —— 這是對「等同手挖速度」這個核心約束的直接違反。
+        -- 停用期間保留的 next_tick 本來就正確地跨過關閉/開啟這個循環。
         s.last_walk_tick = nil
         -- 開啟當下先記住現場的敵人數,否則第一次掃描會把「本來就在旁邊的怪」
         -- 誤判成新增而立刻自我關閉。
@@ -112,7 +123,16 @@ script.on_event("autodig-cycle-mode", function(event)
     local player = game.get_player(event.player_index)
     if not player then return end
     local s = state_for(event.player_index)
-    s.mode = (s.mode == logic.MODES[1]) and logic.MODES[2] or logic.MODES[1]
+    -- 在 logic.MODES 清單裡通用地往後移一格,而不是寫死兩個模式的翻轉 ——
+    -- 這樣以後加第三個模式,熱鍵自動就能循環到,不用回來改這裡。
+    local current_index = 1
+    for i, m in ipairs(logic.MODES) do
+        if m == s.mode then
+            current_index = i
+            break
+        end
+    end
+    s.mode = logic.MODES[(current_index % #logic.MODES) + 1]
     player.print({ "autodig.mode-switched", mode_label(s.mode) })
     autodig_gui.refresh(player, s)
 end)
@@ -198,7 +218,7 @@ local function warn_probe_once(player)
     player.print({ "autodig.probe-unavailable" })
 end
 
--- 真正動手。回傳 true 表示挖成功(呼叫端據此設冷卻)。
+-- 真正動手,成功時會在函式內自己設定冷卻(不是靠呼叫端)。回傳 true 表示挖成功。
 local function try_dig(player, s, entity)
     local cooldown = cooldown_for(player, entity.name)
     if not cooldown then return false end
@@ -233,9 +253,10 @@ local function try_dig(player, s, entity)
         -- 誤判成新增而立刻自我關閉。
         prev_enemy_count = s.enemy_count,
     })
-    -- 基準每輪都更新,包含數量減少的時候 —— 玩家清完怪之後基準要跟著降下來,
-    -- 否則清完場就再也觸發不了警戒。
-    s.enemy_count = enemies
+    -- 警戒關閉時不要覆寫基準。寫 0 進去等於宣稱「附近沒有敵人」,於是重新開啟
+    -- 警戒後的第一次挖掘會把本來就在旁邊的怪判成新增而自我關閉。nil 表示
+    -- 「沒有基準」,blocked_reason 會跳過比較,下一次挖掘再重新抓基準。
+    s.enemy_count = enemy_guard and enemies or nil
 
     if reason == "stress" then
         stop(player, s, "autodig.stopped-stress",
@@ -294,19 +315,39 @@ end)
 script.on_event(defines.events.on_gui_click, function(event)
     local player = game.get_player(event.player_index)
     if not player then return end
+    -- 別的 mod 可能在同一個事件派送裡把這個元素毀掉,而我們拿到的還是同一個
+    -- event.element。讀一個 invalid LuaGuiElement 的任何屬性都會 raise,而
+    -- event handler 裡的未處理錯誤會直接把整台伺服器帶走。
+    -- 這不是理論風險:the-cave 是硬依賴所以先派送,它的 welcome_gui 在玩家點
+    -- 確認鈕時會 destroy 那顆按鈕所在的整個 frame(scripts/welcome_gui.lua)。
+    -- the-cave 自己每個 handler 開頭都檢查 element.valid,我們也必須檢查。
+    if not (event.element and event.element.valid) then return end
+    -- 只有前綴確認是我們自己的元素才值得建立 per-player state ——
+    -- 否則任何 mod 的任何 GUI 互動都會在 storage.autodig.players 建一個
+    -- entry,讓 on_tick 迴圈平白多跑一個從沒真的用過自動挖掘的玩家。
+    -- gui.lua 裡各自的名稱判斷仍然是權威判斷,這裡只是提早退出。
+    if event.element.name:sub(1, 8) ~= "autodig-" then return end
     autodig_gui.on_click(player, state_for(event.player_index), event.element)
 end)
 
 script.on_event(defines.events.on_gui_checked_state_changed, function(event)
     local player = game.get_player(event.player_index)
     if not player then return end
+    -- 同 on_gui_click:忽略已經 invalid 或不是本 mod 的元素,見上方註解。
+    if not (event.element and event.element.valid) then return end
+    if event.element.name:sub(1, 8) ~= "autodig-" then return end
     local s = state_for(event.player_index)
+    local was_enabled = s.enabled
     local handled, power_changed = autodig_gui.on_checkbox(player, s, event.element)
     if power_changed then
-        -- 與熱鍵開啟時完全相同的重置,否則從 GUI 開啟會少做這些事。
-        s.next_tick = 0
-        s.last_walk_tick = nil
-        s.enemy_count = nil
+        if s.enabled and not was_enabled then
+            -- 與熱鍵開啟時完全相同的重置(next_tick 刻意不歸零,理由同熱鍵)。
+            s.last_walk_tick = nil
+            s.enemy_count = nil
+            player.print({ "autodig.enabled", mode_label(s.mode) })
+        elseif was_enabled and not s.enabled then
+            player.print({ "autodig.disabled" })
+        end
     end
     if handled then autodig_gui.refresh(player, s) end
 end)
@@ -314,6 +355,9 @@ end)
 script.on_event(defines.events.on_gui_selection_state_changed, function(event)
     local player = game.get_player(event.player_index)
     if not player then return end
+    -- 同 on_gui_click:忽略已經 invalid 或不是本 mod 的元素,見上方註解。
+    if not (event.element and event.element.valid) then return end
+    if event.element.name:sub(1, 8) ~= "autodig-" then return end
     local s = state_for(event.player_index)
     if autodig_gui.on_selection(player, s, event.element) then
         autodig_gui.refresh(player, s)

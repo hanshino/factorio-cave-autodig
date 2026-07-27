@@ -185,7 +185,7 @@ eq(blocked{ stress = 3.5, enemy_count = 1 }, "stress", "壓力優先於敵人回
 -- 這份清單是 control.lua 與 gui.lua 的共同來源,也必須與 settings.lua 的
 -- allowed_values 一致。把它釘住,免得有人改了其中一邊。
 eq(#logic.MODES, 2, "目前只有兩種模式")
-eq(logic.MODES[1], "forward", "第一個模式是 forward(也是預設)")
+eq(logic.MODES[1], "forward", "第一個模式是 forward(尚未實作;settings.lua 的預設值是 cursor)")
 eq(logic.MODES[2], "cursor", "第二個模式是 cursor")
 
 -- ── logic.lua 必須零 Factorio 依賴 ────────────────────────────────────
