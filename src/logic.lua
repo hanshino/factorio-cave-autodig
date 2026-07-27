@@ -47,4 +47,38 @@ function logic.cooldown_ticks(mining_time, mining_speed)
     return math.ceil(60 * mining_time / mining_speed)
 end
 
+-- 回傳這一輪要「依序嘗試」的候選格,呼叫端挑第一個有 cover entity 且構得到的挖。
+--
+-- 用「有序候選清單」而不是「輪替計數器」是刻意的:清單本身就編碼了優先序,
+-- 不需要在 storage 裡存輪到第幾格的狀態,也就不會有狀態跟世界不同步的問題。
+-- 左側清掉了,下一輪左側就沒有 cover,自然輪到右側。
+function logic.forward_candidates(px, py, dir, width)
+    dir = logic.snap_direction(dir)
+    local v = dir and logic.DIRECTION_VECTORS[dir]
+    if not v then return {} end
+
+    -- 對角線拆成兩個正交分量,不挖對角格本身(見測試裡的說明)。
+    -- 寬度設定在這裡刻意忽略。
+    if logic.is_diagonal(dir) then
+        local a, b = logic.diagonal_components(dir)
+        local va, vb = logic.DIRECTION_VECTORS[a], logic.DIRECTION_VECTORS[b]
+        return {
+            { x = px + va.x, y = py + va.y },
+            { x = px + vb.x, y = py + vb.y },
+        }
+    end
+
+    local front = { x = px + v.x, y = py + v.y }
+    if width ~= 3 then return { front } end
+
+    -- 垂直於行進方向的兩側,就是方向值 ±4(90 度)。
+    local left  = logic.DIRECTION_VECTORS[(dir - 4) % 16]
+    local right = logic.DIRECTION_VECTORS[(dir + 4) % 16]
+    return {
+        { x = front.x + left.x,  y = front.y + left.y },
+        { x = front.x + right.x, y = front.y + right.y },
+        front,
+    }
+end
+
 return logic

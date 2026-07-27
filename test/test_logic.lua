@@ -84,6 +84,52 @@ eq(logic.cooldown_ticks(1.5, 0), nil, "速度為 0 回傳 nil 而不是除以零
 eq(logic.cooldown_ticks(1.5, nil), nil, "缺速度回傳 nil")
 eq(logic.cooldown_ticks(nil, 0.5), nil, "缺時間回傳 nil")
 
+-- ── forward_candidates ────────────────────────────────────────────────
+-- 玩家在格子 (10, 10)。
+
+-- 正交 + 寬度 1:就是正前方一格。
+eq_points(logic.forward_candidates(10, 10, 0, 1), { { x = 10, y = 9 } },
+    "往北寬度 1")
+eq_points(logic.forward_candidates(10, 10, 4, 1), { { x = 11, y = 10 } },
+    "往東寬度 1")
+eq_points(logic.forward_candidates(10, 10, 8, 1), { { x = 10, y = 11 } },
+    "往南寬度 1")
+eq_points(logic.forward_candidates(10, 10, 12, 1), { { x = 9, y = 10 } },
+    "往西寬度 1")
+
+-- 正交 + 寬度 3:順序必須是「左、右、中」。
+-- 中間那格一清掉玩家就往前走一步,先挖中間會把兩側缺口留在身後,挖出來就不是
+-- 完整的 3 格走廊。中間留到最後,玩家只會在整片切面清乾淨之後才前進。
+eq_points(logic.forward_candidates(10, 10, 0, 3),
+    { { x = 9, y = 9 }, { x = 11, y = 9 }, { x = 10, y = 9 } },
+    "往北寬度 3 的順序是左(西)、右(東)、中")
+eq_points(logic.forward_candidates(10, 10, 4, 3),
+    { { x = 11, y = 9 }, { x = 11, y = 11 }, { x = 11, y = 10 } },
+    "往東寬度 3 的順序是左(北)、右(南)、中")
+
+-- 對角線:拆成兩個正交分量,不挖對角格本身。
+-- 直接挖對角格會挖出角色走不進去的階梯 —— Factorio 的碰撞不允許穿對角縫隙,
+-- 結果是一條自己進不去的隧道。
+eq_points(logic.forward_candidates(10, 10, 2, 1),
+    { { x = 10, y = 9 }, { x = 11, y = 10 } },
+    "往東北拆成北、東兩格")
+eq_points(logic.forward_candidates(10, 10, 14, 1),
+    { { x = 9, y = 10 }, { x = 10, y = 9 } },
+    "往西北拆成西、北兩格")
+
+-- 對角線忽略寬度設定。寬度 3 疊在階梯拆解上語意不明,而且沒有實際需求。
+eq_points(logic.forward_candidates(10, 10, 2, 3),
+    { { x = 10, y = 9 }, { x = 11, y = 10 } },
+    "對角線忽略寬度 3")
+
+-- 壞輸入回傳空清單,呼叫端自然什麼都不做。
+eq_points(logic.forward_candidates(10, 10, nil, 1), {}, "方向為 nil 回傳空清單")
+eq(#logic.forward_candidates(10, 10, 99, 1), 0, "無效方向值回傳空清單")
+
+-- 奇數方向先吸附再算。
+eq_points(logic.forward_candidates(10, 10, 1, 1), { { x = 10, y = 9 } },
+    "方向 1 吸附成 north")
+
 -- ── logic.lua 必須零 Factorio 依賴 ────────────────────────────────────
 -- 這個檔案的存在理由就是「可以在 Factorio 外面測」。一旦有人在裡面用了 game
 -- 或 storage,測試就再也跑不起來,而且會是在遊戲裡才發現。用原始碼掃描把這條
