@@ -139,6 +139,12 @@ end)
 
 local COVER = { ["diggy-rock"] = true, ["diggy-rubble"] = true }
 
+-- 放開方向鍵之後還能挖多久。撞牆時 walking_state.walking 已經在實機驗證過
+-- 仍為 true(它反映的是輸入意圖,不是實際位移),前進模式因此不能只靠
+-- walking 本身判斷玩家是否還想繼續走。寬限期同時也是一項獨立的需求:
+-- 放開方向鍵之後,自動挖掘要在半秒內停下來,不能無限期黏著最後一個方向挖。
+local WALK_GRACE_TICKS = 30
+
 local ENEMY_SCAN_RADIUS = 15
 -- 壓力探針的取樣半框。max_in_area 內部以 step 2 掃 cell,所以 ±4 是 5x5 = 25
 -- 個 cell。以每 3 秒一次的挖掘節奏計成本可忽略;真的量到偏重就縮成 ±2。
@@ -287,26 +293,74 @@ local function cursor_target(player, include_rubble)
     return entity
 end
 
+-- the-cave 把 cover 實體放在格子中心 (x + 0.5, y + 0.5),所以用半徑 0.4 的
+-- 點查詢剛好只會命中那一格的那一顆。
+local function cover_at(surface, x, y, include_rubble)
+    local names = include_rubble and { "diggy-rock", "diggy-rubble" } or { "diggy-rock" }
+    local found = surface.find_entities_filtered({
+        position = { x + 0.5, y + 0.5 },
+        radius = 0.4,
+        name = names,
+        limit = 1,
+    })
+    return found[1]
+end
+
+-- 前進模式:依 logic 給的優先序,挑第一個「有 cover 且構得到」的候選格。
+-- 候選格全是空地時回傳 nil —— 呼叫端什麼都不做。絕不因為正前方是空地就
+-- 轉去挖旁邊的牆:那會把隧道兩側掏空,既失去方向控制又推高塌陷壓力。
+local function forward_target(player, s, width, include_rubble)
+    if not logic.walk_active(game.tick, s.last_walk_tick, WALK_GRACE_TICKS) then
+        return nil
+    end
+    local position = player.position
+    local px, py = math.floor(position.x), math.floor(position.y)
+    local candidates = logic.forward_candidates(px, py, s.facing, width)
+    for _, c in ipairs(candidates) do
+        local entity = cover_at(player.surface, c.x, c.y, include_rubble)
+        if entity and player.can_reach_entity(entity) then
+            return entity
+        end
+    end
+    return nil
+end
+
 script.on_event(defines.events.on_tick, function()
     for player_index, s in pairs(storage.autodig.players) do
         if s.enabled then
             local player = game.get_player(player_index)
             if not player then
+                -- stop() 需要一個活著的 player 物件才能 print 訊息和刷新面板,
+                -- 玩家已經斷線拿不到 player,所以這裡只能直接關旗標,不能走 stop()。
                 s.enabled = false
-            elseif logic.ready_to_dig({
-                enabled = s.enabled,
-                has_character = player.character ~= nil,
-                tick = game.tick,
-                next_tick = s.next_tick,
-            }) then
-                local user = settings.get_player_settings(player)
-                local include_rubble = user["autodig-include-rubble"].value
-                if s.mode == "cursor" then
-                    local target = cursor_target(player, include_rubble)
+            elseif not player.character then
+                stop(player, s, "autodig.stopped-no-character")
+            else
+                -- 每 tick 更新,與冷卻無關:玩家轉向後不該等到下次冷卻才生效。
+                -- walking_state.direction 只在 walking 為 true 時有效,所以交給
+                -- logic.latch_direction 處理「該不該採信這次讀到的方向」。
+                local walking_state = player.walking_state
+                s.facing = logic.latch_direction(s.facing,
+                    walking_state.walking, walking_state.direction)
+                if walking_state.walking then s.last_walk_tick = game.tick end
+
+                if logic.ready_to_dig({
+                    enabled = s.enabled,
+                    has_character = true,
+                    tick = game.tick,
+                    next_tick = s.next_tick,
+                }) then
+                    local user = settings.get_player_settings(player)
+                    local include_rubble = user["autodig-include-rubble"].value
+                    local target
+                    if s.mode == "cursor" then
+                        target = cursor_target(player, include_rubble)
+                    else
+                        target = forward_target(player, s,
+                            user["autodig-tunnel-width"].value, include_rubble)
+                    end
                     if target then try_dig(player, s, target) end
                 end
-            elseif s.enabled and player.character == nil then
-                stop(player, s, "autodig.stopped-no-character")
             end
         end
     end

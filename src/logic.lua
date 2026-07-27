@@ -37,13 +37,20 @@ function logic.snap_direction(dir)
     return dir - (dir % 2)
 end
 
+-- 跟 snap_direction / cooldown_ticks 一樣在邊界擋 nil,不讓非數字直接炸出
+-- arithmetic error。目前唯一的呼叫端(forward_candidates)在呼叫這兩個函式
+-- 之前一定先過 snap_direction 拿到非 nil 的方向,所以這裡的 nil 分支目前
+-- 走不到 —— 但用同一種防呆姿態換來的是「以後有人不透過 forward_candidates
+-- 直接呼叫」時得到可預期的回傳值,而不是模組內部三個相鄰函式各自一套規矩。
 function logic.is_diagonal(dir)
+    if type(dir) ~= "number" then return false end
     return dir % 4 == 2
 end
 
 -- 對角線方向拆成兩個相鄰的正交方向。northeast(2) -> north(0), east(4)。
 -- northwest(14) 的第二分量要繞回 0。
 function logic.diagonal_components(dir)
+    if type(dir) ~= "number" then return nil, nil end
     return (dir - 2) % 16, (dir + 2) % 16
 end
 

@@ -74,6 +74,14 @@ local c, d = logic.diagonal_components(14)
 eq(c, 12, "northwest 的第一分量是 west")
 eq(d, 0, "northwest 的第二分量是 north(要繞回 0,不是 16)")
 
+-- 邊界防呆:與 snap_direction / cooldown_ticks 同一種姿態,非數字回傳安全值
+-- 而不是讓 dir % 4 之類的算術直接炸出 error。
+eq(logic.is_diagonal(nil), false, "is_diagonal(nil) 回傳 false 而不是爆炸")
+eq(logic.is_diagonal("north"), false, "is_diagonal 對非數字回傳 false")
+local e, f = logic.diagonal_components(nil)
+eq(e, nil, "diagonal_components(nil) 第一分量回傳 nil")
+eq(f, nil, "diagonal_components(nil) 第二分量回傳 nil")
+
 -- ── cooldown_ticks ────────────────────────────────────────────────────
 -- diggy-rock 的 mining_time 是 1.5,基礎角色 mining_speed 是 0.5 -> 3 秒 = 180 tick
 eq(logic.cooldown_ticks(1.5, 0.5), 180, "岩石在基礎採礦速度下是 180 tick")
@@ -106,6 +114,14 @@ eq_points(logic.forward_candidates(10, 10, 0, 3),
 eq_points(logic.forward_candidates(10, 10, 4, 3),
     { { x = 11, y = 9 }, { x = 11, y = 11 }, { x = 11, y = 10 } },
     "往東寬度 3 的順序是左(北)、右(南)、中")
+-- 南、西再補一組,確保 (dir - 4) % 16 / (dir + 4) % 16 的環繞算術兩邊都測到,
+-- 不是只有 north 那組剛好用到負數取餘的分支。
+eq_points(logic.forward_candidates(10, 10, 8, 3),
+    { { x = 11, y = 11 }, { x = 9, y = 11 }, { x = 10, y = 11 } },
+    "往南寬度 3 的順序是左(東)、右(西)、中")
+eq_points(logic.forward_candidates(10, 10, 12, 3),
+    { { x = 9, y = 11 }, { x = 9, y = 9 }, { x = 9, y = 10 } },
+    "往西寬度 3 的順序是左(南)、右(北)、中")
 
 -- 對角線:拆成兩個正交分量,不挖對角格本身。
 -- 直接挖對角格會挖出角色走不進去的階梯 —— Factorio 的碰撞不允許穿對角縫隙,
@@ -116,6 +132,13 @@ eq_points(logic.forward_candidates(10, 10, 2, 1),
 eq_points(logic.forward_candidates(10, 10, 14, 1),
     { { x = 9, y = 10 }, { x = 10, y = 9 } },
     "往西北拆成西、北兩格")
+-- 東南、西南再補一組,湊齊全部四個對角方向。
+eq_points(logic.forward_candidates(10, 10, 6, 1),
+    { { x = 11, y = 10 }, { x = 10, y = 11 } },
+    "往東南拆成東、南兩格")
+eq_points(logic.forward_candidates(10, 10, 10, 1),
+    { { x = 10, y = 11 }, { x = 9, y = 10 } },
+    "往西南拆成南、西兩格")
 
 -- 對角線忽略寬度設定。寬度 3 疊在階梯拆解上語意不明,而且沒有實際需求。
 eq_points(logic.forward_candidates(10, 10, 2, 3),
@@ -151,6 +174,12 @@ eq(logic.latch_direction(nil, true, 4), 4, "第一次有方向就記住")
 eq(logic.latch_direction(4, false, nil), 4, "沒在走且方向為 nil 時保留舊值")
 eq(logic.latch_direction(4, true, nil), 4, "行走中但方向為 nil 也保留舊值")
 
+-- north = 0 是個看起來像「假值」的合法方向。實作用的是
+-- `if walking and direction then`,Lua 裡 0 是真值,所以這裡本該正確,
+-- 但如果哪天有人把它改成別的語言常見的「0 是假」寫法,這兩條會先炸。
+eq(logic.latch_direction(4, true, 0), 0, "方向為 0(north)時要真的採信,不能被當成沒方向")
+eq(logic.latch_direction(0, false, 4), 0, "上次 latch 住的方向是 0 時,沒在走要能正確保留這個 0")
+
 -- ── walk_active ───────────────────────────────────────────────────────
 -- 前進模式需要知道「玩家現在是不是在往某個方向推」。理論上撞牆時
 -- walking_state.walking 仍為 true(它反映輸入意圖不是實際位移),但這個假設
@@ -159,6 +188,13 @@ eq(logic.walk_active(100, 100, 30), true, "這一 tick 正在走")
 eq(logic.walk_active(130, 100, 30), true, "寬限期邊界內仍算在走")
 eq(logic.walk_active(131, 100, 30), false, "超過寬限期就不算")
 eq(logic.walk_active(100, nil, 30), false, "從來沒走過就不算")
+
+-- tick 0 跟 last_walk_tick 0 都是合法值(遊戲剛開始的第一個 tick),不是
+-- 「還沒發生」的意思 —— 只有 nil 才是。實作用 `if not last_walk_tick then`,
+-- Lua 的 0 是真值所以本該正確,這裡直接釘住避免以後被改壞。
+eq(logic.walk_active(0, 0, 30), true, "tick 0 且 last_walk_tick 0 時仍算在走,0 不是 nil")
+eq(logic.walk_active(30, 0, 30), true, "從 tick 0 開始算,寬限期邊界內仍算在走")
+eq(logic.walk_active(31, 0, 30), false, "從 tick 0 開始算,超過寬限期就不算")
 
 -- ── blocked_reason ────────────────────────────────────────────────────
 local function blocked(over)
