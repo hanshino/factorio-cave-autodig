@@ -1,0 +1,9 @@
+{
+  "name": "hanshino-cave-autodig",
+  "version": "0.1.0",
+  "title": "The Cave Auto-Dig",
+  "author": "hanshino",
+  "factorio_version": "2.0",
+  "description": "Removes the repetitive clicking from digging in The Cave without changing the pace of the game. Mining speed, reach and every dig consequence stay exactly as if you had clicked each rock yourself.",
+  "dependencies": ["base >= 2.0", "the-cave >= 2.7.0"]
+}
