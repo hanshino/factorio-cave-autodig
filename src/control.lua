@@ -121,8 +121,13 @@ local function mining_speed_for(player)
     if not character then return nil end
     local base = character.prototype.mining_speed
     if not base or base <= 0 then return nil end
-    return base * (1 + player.character_mining_speed_modifier
-                     + player.force.manual_mining_speed_modifier)
+    -- 兩個加成是「相乘」不是相加。官方 API 文件對 manual_mining_speed_modifier 的
+    -- 說法是「actual mining speed will be multiplied by 1 + modifier」,wiki 的手挖
+    -- 公式也是 (1 + 勢力加成) * (1 + 角色加成) * 角色採礦速度 / 挖掘時間。
+    -- 寫成 (1 + a + b) 只有在其中一個為 0 時才剛好正確 —— 兩個都非零時會低估
+    -- 有效速度,也就是挖得比手挖慢;反過來的情境同樣會讓「等同手挖」這個前提失效。
+    return base * (1 + player.character_mining_speed_modifier)
+                * (1 + player.force.manual_mining_speed_modifier)
 end
 
 -- mining_time 一律從實體原型讀,不寫死。diggy-rock 是 1.5、diggy-rubble 是 1.0,
