@@ -28,7 +28,9 @@ already does — it just saves you from doing the click yourself, over and over,
 - **Two safety gates**, so it stops itself instead of digging you into trouble while your
   attention is on something else:
   - **Collapse-stress gate** — stops as soon as nearby rock stress approaches The Cave's
-    collapse threshold, and tells you the measured value against the configured limit.
+    collapse threshold, and tells you the measured value against the configured limit. Only
+    active when The Cave's own `the-cave-collapse-mode` startup setting is `enabled`; that is
+    **not** the default, so on a stock install the enemy gate below is the only one running.
   - **Enemy gate** — stops the moment the number of enemies near you increases, so it never
     digs straight into a nest.
 - A GUI panel (and two hotkeys — toggle, cycle mode) controls all of the above per player.
@@ -41,7 +43,8 @@ Requires [The Cave](https://mods.factorio.com/mod/the-cave) (2.7.0 or later) and
 
 ### Notes for server admins
 
-The collapse-stress gate calls into one of The Cave's internal debug/benchmark hooks, which
-is not a guaranteed public API. If a future version of The Cave removes or renames it, this
-mod detects that, prints a one-time warning, and keeps digging with just the enemy gate — it
-never crashes or silently mines through a gate that stopped working.
+The collapse-stress gate depends on two of The Cave's own internals that this mod does not
+control: a startup setting (`the-cave-collapse-mode`) and an internal debug/benchmark remote
+interface. Neither is a guaranteed public API. If a future version of The Cave renames or
+removes either one, this mod detects it, prints a one-time warning, and keeps digging with
+just the enemy gate — it never crashes or silently mines through a gate that stopped working.

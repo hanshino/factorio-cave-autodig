@@ -48,12 +48,13 @@ ZIP="dist/${NAME}_${VERSION}.zip"
 # localizations / internal —— 沒有 "helper-mods" 這個值。這個 mod 是「不改變玩法、
 # 只是把手動操作自動化」的工具，對應到官方定義最接近的是 utilities
 # （"Providing the player with new tools or adjusting the game interface, without
-# fundamentally changing gameplay."）。task-10-brief.md 原本寫的是 helper-mods，
-# 那不是 portal 認得的分類，這裡改成 utilities —— 送出前請再次確認。
+# fundamentally changing gameplay."）。"helper-mods" 這種望文生義的名稱不是 portal
+# 承認的分類，填了會被 API 拒絕 —— 送出前請再次確認這裡是 utilities。
 CATEGORY="utilities"
-LICENSE="default_gnulgplv3"       # 與 locale-mod 一致；本專案未附獨立 LICENSE 檔
+LICENSE="default_gnulgplv3"       # 與 locale-mod 一致；條文見 repo 根目錄的 LICENSE
+                                  # 檔（package.sh 會把它一起打包進 zip）
 SOURCE_URL=""                     # 有 git repo 再填
-SUMMARY="移除 The Cave 手動挖礦的重複點擊，但刻意不加速遊戲：採礦速度、距離判定與每次挖掘的後果，都跟你自己動手點一模一樣。"
+SUMMARY="Removes the repetitive clicking of manual digging in The Cave, without speeding anything up: mining speed, reach, and every dig's consequences are exactly the same as clicking it yourself."
 DESCRIPTION_FILE="portal-description.md"
 
 echo "模組名稱 : $NAME        （發佈後無法更名）"
@@ -72,6 +73,21 @@ if [ "$MODE" != "details" ]; then
   TOP=$(unzip -Z1 "$ZIP" | awk -F/ 'NR==1{print $1}')
   [ "$TOP" = "${NAME}_${VERSION}" ] || { echo "zip 最外層是 '$TOP'，應為 '${NAME}_${VERSION}'"; exit 1; }
   echo "zip 結構檢查通過（最外層資料夾 = $TOP）"
+
+  # 上面只驗證了資料夾名稱，沒驗證裡面的內容真的是「現在的」src/ —— 一份用
+  # 舊版 src 打包出來、檔名和版本號卻恰好沒變的 zip 不會被上面那個檢查攔下來，
+  # 而發布一份跟目前 src/ 不一致的舊 build，正是這個 mod 剛花一整波修過的
+  # 「文案跟現實不符」問題的另一種樣子：發布的不是剛剛看過、審過的東西。
+  # 把 zip 展開後跟 src/ 逐檔比對內容，發現任何差異就中止，請人重新跑
+  # ./package.sh 再重新上傳 —— 不要自己猜測或略過差異。
+  DIFFDIR=$(mktemp -d)
+  trap 'rm -rf "$DIFFDIR"' EXIT
+  unzip -q "$ZIP" -d "$DIFFDIR"
+  if ! diff -rq "$DIFFDIR/$TOP" src; then
+    echo "!! zip 內容跟目前的 src/ 不一致（差異見上面）—— 請重新執行 ./package.sh 再重新上傳"
+    exit 1
+  fi
+  echo "zip 內容檢查通過（與 src/ 完全一致）"
 fi
 
 if [ "$CONFIRM" != "1" ]; then

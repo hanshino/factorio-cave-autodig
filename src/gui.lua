@@ -106,6 +106,11 @@ function gui.refresh(player, state)
     if not frame then return end
     frame["autodig-power"].state = state.enabled
     frame["autodig-mode"].selected_index = index_of(logic.MODES, state.mode)
+    -- 只分「挖掘中」跟「已關閉」兩種,沒有「待命」——這個函式只在開關/模式/
+    -- 設定變動時被呼叫,不是每 tick 都跑,所以沒有辦法即時分辨「已啟動但這一刻
+    -- 前方剛好沒有目標」跟「持續在挖」。要做出準確的待命狀態需要每 tick 刷新
+    -- 這個面板,對一台正式伺服器來說,為了這種裝飾性的資訊值不回那個成本。
+    -- 刻意不加對應的字串,免得以後有人「順手」把它接上去。
     local key = "autodig.gui-state-off"
     if state.enabled then
         key = "autodig.gui-state-running"

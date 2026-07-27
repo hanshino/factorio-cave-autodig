@@ -55,14 +55,19 @@ end
 local function init_storage()
     storage.autodig = storage.autodig or {}
     storage.autodig.players = storage.autodig.players or {}
-    -- 應力探針介面不見時每個 session 只警告一次,不要洗版。
+    -- 這兩個警告旗標都存在 storage 裡,跟著存檔走 —— 是「每個存檔只警告一次」,
+    -- 不是「每個 session」:重新連上同一個存檔不會讓警告再跳出來。應力探針
+    -- (diggy-v1.debug_max_stress 這個 remote 介面)和塌陷開關設定
+    -- (the-cave-collapse-mode 這個 startup setting)是兩個獨立的失敗模式,
+    -- 各自一個旗標,見 warn_probe_once / warn_collapse_setting_missing_once。
     storage.autodig.probe_warned = storage.autodig.probe_warned or false
+    storage.autodig.collapse_setting_warned = storage.autodig.collapse_setting_warned or false
 end
 
 script.on_init(init_storage)
 -- 這個 mod 目前沒有舊版可遷移,但骨架先留好:未來加欄位時,舊存檔裡的
 -- entry 會缺那個欄位,state_for 只在「整個 entry 不存在」時才補預設值。
-script.on_configuration_changed(function()
+script.on_configuration_changed(function(event)
     init_storage()
     for _, s in pairs(storage.autodig.players) do
         -- next_tick 一定要有值:ready_to_dig 拿它跟 game.tick 做 < 比較,nil 會直接報錯。
@@ -72,6 +77,17 @@ script.on_configuration_changed(function()
         -- 補成 0 會把哨兵變成「基準是 0 隻敵人」,於是玩家旁邊本來就有怪的時候,
         -- 下一次挖掘會誤判成敵人增加而自我關閉。舊存檔缺這個欄位時讀到 nil,
         -- 那正好就是安全的預設值。
+    end
+
+    -- 只有這個 mod 自己的版本變了,才重新解除兩個警告旗標 —— 別的 mod 更新
+    -- 觸發的 configuration_changed 不該讓警告重新武裝,那樣玩家會在什麼都
+    -- 沒修好的情況下又看到一次同一則警告。版本真的變了,代表這個 mod 有機會
+    -- 已經更新過偵測邏輯,或 The Cave 已經修好了介面,讓警告能再有一次機會
+    -- 派上用場,而不是永遠卡死在第一次警告,即使問題後來解決了也不會再提醒。
+    local own_changes = event.mod_changes and event.mod_changes["hanshino-cave-autodig"]
+    if own_changes and own_changes.old_version ~= own_changes.new_version then
+        storage.autodig.probe_warned = false
+        storage.autodig.collapse_setting_warned = false
     end
 
     -- mod 更新後舊的 GUI 元素可能結構不同,直接砍掉重建最省事。
@@ -151,8 +167,8 @@ local ENEMY_SCAN_RADIUS = 15
 local STRESS_PROBE_HALF = 4
 
 -- 每個 stop 路徑都經過這裡,所以面板刷新放在這裡一次做完,而不是要求每個
--- 呼叫端自己記得呼叫 —— 現在有兩個呼叫點,Task 10 還會再加兩個,漏掉一次
--- 就會讓面板顯示「挖掘中」但其實已經停了。
+-- 呼叫端自己記得呼叫 —— 現在有四個呼叫點,漏掉一次就會讓面板顯示「挖掘中」
+-- 但其實已經停了。
 local function stop(player, s, reason_key, ...)
     s.enabled = false
     player.print({ reason_key, ... })
@@ -185,9 +201,17 @@ local function cooldown_for(player, entity_name)
 end
 
 -- the-cave 的塌陷系統是不是開著。跨 mod 讀 startup setting 是合法的。
+--
+-- 回傳第二個值代表「這個設定本身在 settings.startup 裡完全找不到」——這跟
+-- 「找到了,但值不是 enabled」是兩種完全不同的情況:後者是使用者/伺服器
+-- 自己選擇關掉,正常且該保持沉默;前者代表 the-cave-collapse-mode 這個名稱
+-- 本身消失了(The Cave 改了設定名稱),整道塌陷閘會不聲不響地失效,表現起來
+-- 跟「使用者自己關掉」一模一樣 —— 但沒有人真的做了這個選擇。呼叫端要分得出
+-- 這兩種情況,才能只在後者警告。
 local function collapse_enabled()
     local setting = settings.startup["the-cave-collapse-mode"]
-    return setting ~= nil and setting.value == "enabled"
+    if setting == nil then return false, "missing" end
+    return setting.value == "enabled"
 end
 
 -- 向 the-cave 問這一帶目前的最大岩層應力。
@@ -217,11 +241,21 @@ local function enemy_count_near(surface, position)
     })
 end
 
--- 應力探針壞掉時每個 session 只警告一次,不要洗版。
-local function warn_probe_once(player)
+-- 應力探針壞掉時每個存檔只警告一次,不要洗版。這是伺服器層級的狀況
+-- (The Cave 的介面本身壞了,不是某個玩家個人的問題),所以用 game.print
+-- 讓每個在線玩家都看到,而不是只有剛好觸發這次挖掘的那一個人。
+local function warn_probe_once()
     if storage.autodig.probe_warned then return end
     storage.autodig.probe_warned = true
-    player.print({ "autodig.probe-unavailable" })
+    game.print({ "autodig.probe-unavailable" })
+end
+
+-- the-cave-collapse-mode 這個 startup setting 本身找不到時,每個存檔只警告
+-- 一次 —— 跟應力探針是兩個獨立的失敗模式,理由同上,各自一個旗標分開計。
+local function warn_collapse_setting_missing_once()
+    if storage.autodig.collapse_setting_warned then return end
+    storage.autodig.collapse_setting_warned = true
+    game.print({ "autodig.collapse-setting-missing" })
 end
 
 -- 真正動手,成功時會在函式內自己設定冷卻(不是靠呼叫端)。回傳 true 表示挖成功。
@@ -233,12 +267,21 @@ local function try_dig(player, s, entity)
     local x, y = math.floor(position.x), math.floor(position.y)
     local user = settings.get_player_settings(player)
 
-    local gate_collapse = collapse_enabled()
+    -- player.surface 在 Space Age 的遠端視角(remote view)下是攝影機所在的
+    -- 星球,不是角色的 —— 但下面用到 player.surface 的兩個查詢,對象(entity /
+    -- position)本來就是靠同一個 player.surface 找到的,彼此一致,不會查錯
+    -- 星球。真正擋住遠端視角亂挖的是呼叫端(cursor_target / forward_target)
+    -- 裡對 can_reach_entity 的檢查,那是相對角色量測的,詳見 forward_target
+    -- 裡的完整說明。
+    local gate_collapse, collapse_problem = collapse_enabled()
+    if collapse_problem then
+        warn_collapse_setting_missing_once()
+    end
     local stress, probe_problem
     if gate_collapse then
         stress, probe_problem = stress_at(player.surface, x, y)
         if probe_problem then
-            warn_probe_once(player)
+            warn_probe_once()
             -- 探針壞掉就降級成沒有這道閘,而不是停止挖掘。
             gate_collapse = false
         end
@@ -313,6 +356,12 @@ local function forward_target(player, s, width, include_rubble)
     if not logic.walk_active(game.tick, s.last_walk_tick, WALK_GRACE_TICKS) then
         return nil
     end
+    -- player.position 在 Space Age 的遠端視角(remote view)下是攝影機的位置,
+    -- 不是角色的 —— 遠端視角時 player.character 依然非 nil,所以 on_tick 裡
+    -- 「沒有角色」的判斷擋不住這個情況,底下算出來的候選格會圍著攝影機而不是
+    -- 角色。真正兜住這件事的是下面迴圈裡的 player.can_reach_entity:它是相對
+    -- 角色量測的,遠端視角時角色通常構不到候選格,檢查自然會失敗。這一行不能
+    -- 被當成「反正下面會擋掉,這裡多餘」而移除或弱化 can_reach_entity 的呼叫。
     local position = player.position
     local px, py = math.floor(position.x), math.floor(position.y)
     local candidates = logic.forward_candidates(px, py, s.facing, width)

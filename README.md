@@ -68,6 +68,36 @@ An "auto-dig" built on damaging or otherwise destroying the entity (turret fire,
 entire mod is built around calling `LuaEntity::mine_entity` from real player code — it is the
 only removal path that sets `player_mined_rock_directly = true`.
 
+## Forward mode: two verified assumptions it depends on
+
+Two facts turned out to be load-bearing for forward mode and were measured in-game rather than
+assumed. Recording them here so nobody re-derives (or re-doubts) either one.
+
+**`walking_state.walking` stays `true` while the character is blocked against a wall.**
+Verified in-game 2026-07-27. It reflects input intent, not actual displacement, so a player
+holding a movement key into solid rock still reads as "walking" every tick. This is the entire
+reason forward mode can work at all — without it, `logic.walk_active` would go stale the
+instant the character stopped moving, and forward mode could never advance past the first tile
+of any wall. `WALK_GRACE_TICKS` (`src/control.lua`) exists for an independent reason on top of
+this fact, not as insurance against it turning out false — it also has to make digging stop
+within half a second of the key being released; see the comment there.
+
+**`LuaEntity::mine_entity` does not enforce reach.** Measured on a throwaway Factorio 2.0.77
+server: entities at 9.19, 10.19, and 20.00 tiles were all mined successfully via `mine_entity`
+while `player.can_reach_entity(entity)` reported `false` for that same entity at that same
+distance. `mine_entity` mines whatever it's handed, regardless of distance. This is why the
+`player.can_reach_entity` check inside `forward_target` and `cursor_target` is the **only**
+distance guard anywhere in this mod — it is load-bearing, not defensive, and must never be
+removed, weakened, or short-circuited.
+
+`diggy-rock` resolves its reach through `resource_reach_distance`, not the more common
+`reach_distance` — the two are separate character stats. The Cave's 10-level reach research
+raises both by +2 per level, so the effective reach for `diggy-rock` starts around 3.2 tiles at
+season start and reaches roughly 23 tiles fully researched. The check region is circular
+(Euclidean), measured to the nearest point of the target's collision box, not tile-center to
+tile-center — which is why `can_reach_entity` is asked directly rather than this mod ever
+computing or hardcoding a distance itself.
+
 ## The multiplicative mining-speed formula
 
 `mining_speed_for` in `src/control.lua` computes:
@@ -104,7 +134,7 @@ The reason this split exists: **a headless Factorio server has no player charact
 exercised outside a real client at all — there is no way to unit-test them. Pulling every
 decision that doesn't need those things out into a dependency-free module means that logic can
 run under a plain Lua interpreter (`test/run.sh` runs it in `nickblah/lua:5.2` — no Factorio
-engine involved) with a real, fast unit test suite (81 assertions as of this task), instead of
+engine involved) with a real, fast unit test suite (94 assertions as of this task), instead of
 being untestable until someone plays the game.
 
 This boundary is enforced as a test, not just a convention: the last block of
@@ -113,9 +143,12 @@ seven forbidden global names. If anyone ever adds a `game.*` or `storage.*` call
 `logic.lua`, this test fails immediately — instead of the whole module silently becoming
 untestable outside the running game with no error telling you why.
 
-## `debug_max_stress`: an unstable, unofficial dependency
+## The collapse-stress gate's two unstable, unofficial dependencies
 
-The collapse-stress gate calls into The Cave via
+The collapse-stress gate depends on **two** of The Cave's own internals, neither of which is
+a guaranteed public API, and each fails in a different way.
+
+**`debug_max_stress`** — the collapse-stress gate calls into The Cave via
 `remote.call("diggy-v1", "debug_max_stress", ...)`. This is registered in the-cave's
 `control.lua` under the comment:
 
@@ -126,18 +159,38 @@ plumbing that this mod happens to be able to call too. It can be renamed, restru
 removed in any future release of The Cave with no deprecation warning, and there is nothing
 this mod can do to prevent that.
 
-Degradation behavior (`stress_at` / `try_dig` in `src/control.lua`):
+**`the-cave-collapse-mode`** — whether the gate runs at all is read from this startup setting
+(`collapse_enabled()` in `src/control.lua`). This is ordinary product config, not a debug hook,
+which if anything makes it *more* likely to be renamed someday than the remote interface above.
+If the setting name disappears, `settings.startup["the-cave-collapse-mode"]` returns `nil` —
+indistinguishable, on its own, from a server that deliberately left the gate off. Without
+special-casing that, the gate would vanish with no observable difference and no warning.
+`collapse_enabled()` therefore returns a second value distinguishing "found, but not enabled"
+(normal, silent) from "not found at all" (warned once, see below).
 
-1. Before calling, check that `remote.interfaces["diggy-v1"]` and its `debug_max_stress`
-   entry both still exist.
+Degradation behavior (`src/control.lua`):
+
+1. Before calling `debug_max_stress`, check that `remote.interfaces["diggy-v1"]` and its
+   `debug_max_stress` entry both still exist.
 2. Wrap the actual `remote.call` in `pcall` regardless — an interface can exist with an
    incompatible signature.
-3. If either check fails, print a **one-time-per-session** warning
+3. If either check fails, print a **one-time-per-save** warning
    (`autodig.probe-unavailable`, gated on `storage.autodig.probe_warned`) and drop only the
    collapse-stress gate for that dig (`gate_collapse = false`). Auto-dig keeps running; it
    simply stops checking collapse risk until the mod is updated to match whatever The Cave
    changed.
-4. The enemy gate does not depend on this interface at all and is unaffected either way.
+4. If `the-cave-collapse-mode` itself cannot be found, print a separate **one-time-per-save**
+   warning (`autodig.collapse-setting-missing`, gated on
+   `storage.autodig.collapse_setting_warned`) — same mechanism, independent flag, so the two
+   failure modes don't mask or double up on each other.
+5. Both warning flags live in `storage`, not a module-local, so "once per save" is literal —
+   reconnecting to the same save does not print it again. They are cleared in
+   `on_configuration_changed` only when this mod's own version changed (checked against
+   `event.mod_changes["hanshino-cave-autodig"]`), so a later update that fixes the detection
+   logic — or a Cave update that restores the interface — gets a chance to warn again instead
+   of staying latched forever. `player.print` is deliberately not used for either warning: this
+   is a server-wide condition, not a personal one, so both use `game.print`.
+6. The enemy gate does not depend on either of these and is unaffected either way.
 
 The one thing this mod must never do is let a broken/renamed remote interface turn into an
 uncaught Lua error — that would either silently disable auto-dig with a cryptic error popup,
@@ -164,13 +217,17 @@ language file.
 ## Why `package.sh` copies files by whitelist, not `cp -r`
 
 `package.sh` lists the exact files that go into the zip (`src/info.json src/data.lua
-src/settings.lua src/control.lua src/logic.lua src/gui.lua` plus the two locale directories)
-instead of recursively copying `src/`. This mirrors a near-miss in the sibling `locale-mod`
-project, where a stray `.omc/` tool-state directory got swept into a build by `cp -r` and
-nearly got published to the public mod portal. Any new source file must be added to this
-whitelist explicitly — an unlisted file is silently left out of the zip, which is the safe
-failure direction, but also means "I added a file and it's not in the build" is usually a
-forgotten whitelist entry, not a bug in `package.sh`.
+src/settings.lua src/control.lua src/logic.lua src/gui.lua` plus the two locale directories,
+plus the repo-root `LICENSE`) instead of recursively copying `src/`. This mirrors a near-miss
+in the sibling `locale-mod` project, where a stray `.omc/` tool-state directory got swept into
+a build by `cp -r` and nearly got published to the public mod portal. Any new source file must
+be added to this whitelist explicitly — an unlisted file is silently left out of the zip, which
+is the safe failure direction, but also means "I added a file and it's not in the build" is
+usually a forgotten whitelist entry, not a bug in `package.sh`.
+
+`publish.sh` also diffs the zip's contents against `src/` byte-for-byte before letting a
+`release`/`init` proceed, so uploading a stale build (packaged from an older `src/`, before the
+last few edits) fails loudly instead of quietly shipping code nobody reviewed.
 
 ## Console/RCON injection: considered and rejected
 
@@ -260,8 +317,14 @@ verified on the live server as-is.
 1. On an already-cleared, open area near a wall, turn on auto-dig. It should dig only a few
    tiles before printing "應力 X.XX（安全上限 3.00）" ("rock stress X.XX (safety limit 3.00)")
    and stopping.
-2. Cross-check the number by hand:
-   `/c game.player.print(remote.call("diggy-v1","debug_max_stress", game.player.surface.index, -4,-4,4,4))`
+2. Cross-check the number by hand. The box must be centered on **your own position**, not
+   world origin — `stress_at` in `src/control.lua` samples `x ± STRESS_PROBE_HALF` around the
+   *target tile*, and a box built from `-4,-4,4,4` only happens to agree with that when digging
+   exactly at (0,0); anywhere else it silently checks the wrong area and sends you chasing a
+   mismatch that isn't really there. `h` below must match `STRESS_PROBE_HALF` (currently 4):
+   ```
+   /c local h = 4; local p = game.player.position; local x, y = math.floor(p.x), math.floor(p.y); game.player.print(remote.call("diggy-v1","debug_max_stress", game.player.surface.index, x-h, y-h, x+h, y+h))
+   ```
    — confirm the mod's reading is in the same ballpark.
 3. Dig a normal single-tile-wide tunnel through ordinary rock — it should **not** be blocked
    (a 1-tile corridor's stress should sit well below 3.0). If it keeps getting blocked, the
