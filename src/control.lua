@@ -23,4 +23,81 @@ local function assert_direction_defines()
 end
 assert_direction_defines()
 
-script.on_init(function() end)
+local MODES = { "forward", "cursor" }
+
+local function default_mode(player)
+    return settings.get_player_settings(player)["autodig-default-mode"].value
+end
+
+local function state_for(player_index)
+    local players = storage.autodig.players
+    local s = players[player_index]
+    if not s then
+        s = {
+            enabled = false,
+            mode = "forward",
+            next_tick = 0,
+            facing = nil,          -- latch 的最後有效行走方向
+            last_walk_tick = nil,  -- 最後一次 walking_state.walking 為真的 tick
+            enemy_count = 0,       -- 上次掃描到的附近敵人數
+        }
+        players[player_index] = s
+    end
+    return s
+end
+
+local function init_storage()
+    storage.autodig = storage.autodig or {}
+    storage.autodig.players = storage.autodig.players or {}
+    -- 應力探針介面不見時每個 session 只警告一次,不要洗版。
+    storage.autodig.probe_warned = storage.autodig.probe_warned or false
+end
+
+script.on_init(init_storage)
+-- 這個 mod 目前沒有舊版可遷移,但骨架先留好:未來加欄位時,舊存檔裡的
+-- entry 會缺那個欄位,state_for 只在「整個 entry 不存在」時才補預設值。
+script.on_configuration_changed(function()
+    init_storage()
+    for _, s in pairs(storage.autodig.players) do
+        if s.enemy_count == nil then s.enemy_count = 0 end
+        if s.next_tick == nil then s.next_tick = 0 end
+    end
+end)
+
+script.on_event(defines.events.on_player_created, function(event)
+    local player = game.get_player(event.player_index)
+    if player then state_for(event.player_index).mode = default_mode(player) end
+end)
+
+script.on_event(defines.events.on_player_removed, function(event)
+    storage.autodig.players[event.player_index] = nil
+end)
+
+local function mode_label(mode)
+    return { "autodig.mode-" .. mode }
+end
+
+script.on_event("autodig-toggle", function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    local s = state_for(event.player_index)
+    s.enabled = not s.enabled
+    if s.enabled then
+        s.next_tick = 0
+        s.last_walk_tick = nil
+        -- 開啟當下先記住現場的敵人數,否則第一次掃描會把「本來就在旁邊的怪」
+        -- 誤判成新增而立刻自我關閉。
+        s.enemy_count = nil
+        player.print({ "autodig.enabled", mode_label(s.mode) })
+    else
+        player.print({ "autodig.disabled" })
+    end
+end)
+
+script.on_event("autodig-cycle-mode", function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    local s = state_for(event.player_index)
+    s.mode = (s.mode == MODES[1]) and MODES[2] or MODES[1]
+    player.print({ "autodig.mode-switched", mode_label(s.mode) })
+end)
