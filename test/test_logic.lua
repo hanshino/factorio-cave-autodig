@@ -88,21 +88,61 @@ eq(logic.cooldown_ticks(nil, 0.5), nil, "缺時間回傳 nil")
 -- 這個檔案的存在理由就是「可以在 Factorio 外面測」。一旦有人在裡面用了 game
 -- 或 storage,測試就再也跑不起來,而且會是在遊戲裡才發現。用原始碼掃描把這條
 -- 規則變成會失敗的測試。
+--
+-- 掃描前先剝掉註解:散文裡提到 defines.direction 是正常的,不該被當成依賴。
+-- 字串字面量刻意「不」剝掉 —— _G["game"] 必須抓得到,而純邏輯模組裡出現這些
+-- 字的字串本來就值得看一眼。
+local FORBIDDEN_GLOBALS = { "game", "storage", "settings", "defines",
+                            "prototypes", "remote", "script" }
+
+local function strip_lua_comments(source)
+    -- 區塊註解要先剝,否則裡面的 -- 會讓行註解規則咬到 ]] 之前就停。
+    -- %1 反向參照讓 --[==[ ... ]==] 這種長括號也能正確配對。
+    source = source:gsub("%-%-%[(=*)%[.-%]%1%]", " ")
+    return (source:gsub("%-%-[^\n]*", " "))
+end
+
+-- 回傳這段原始碼裡出現的禁用全域名稱清單(依 FORBIDDEN_GLOBALS 的順序)。
+local function find_factorio_globals(source)
+    local code = strip_lua_comments(source)
+    local hits = {}
+    for _, word in ipairs(FORBIDDEN_GLOBALS) do
+        -- %f[%w_] / %f[^%w_] 是識別字邊界,所以 gamer 和 mystorage 不會誤中。
+        if code:find("%f[%w_]" .. word .. "%f[^%w_]") then
+            hits[#hits + 1] = word
+        end
+    end
+    return hits
+end
+
+-- 掃描器自己也要有測試。只拿它掃一個「本來就乾淨」的檔案,證明不了它抓得到
+-- 任何東西 —— 一個永遠回傳空清單的函式也會通過那種檢查。
+local function eq_hits(source, expected, label)
+    eq(table.concat(find_factorio_globals(source), ","), expected, label)
+end
+
+eq_hits("local t = game.tick", "game", "抓得到直接的點存取")
+eq_hits("local x = storage[key]", "storage", "抓得到中括號存取")
+eq_hits("local g = game", "game", "抓得到別名(舊 pattern 漏掉的)")
+eq_hits("game:foo()", "game", "抓得到冒號呼叫(舊 pattern 漏掉的)")
+eq_hits('local f = _G["game"]', "game", "抓得到 _G 字串索引(舊 pattern 漏掉的)")
+eq_hits("-- Factorio 2.0 的 defines.direction 是 16 方向", "",
+    "行註解裡提到 defines.direction 不算依賴(舊 pattern 誤抓的)")
+eq_hits("--[[ storage.foo ]] local x = 1", "",
+    "區塊註解裡的 storage 不算依賴")
+eq_hits("--[==[ remote.call ]==] local x = 1", "",
+    "長括號區塊註解也要剝掉")
+eq_hits("local gamer = 1", "", "gamer 不是 game")
+eq_hits("local x = mystorage.y", "", "mystorage 不是 storage")
+eq_hits("local a = settings and defines", "settings,defines",
+    "同一行多個依賴都要抓到,依 FORBIDDEN_GLOBALS 順序")
+
 do
     local f = assert(io.open("src/logic.lua", "r"))
     local source = f:read("*a")
     f:close()
-    for _, forbidden in ipairs({ "game", "storage", "settings", "defines",
-                                 "prototypes", "remote", "script" }) do
-        total = total + 1
-        -- %f[%w] 是 Lua 的邊界比對,避免 "settings" 誤中註解裡的
-        -- "mod-settings" 之類的字。
-        if source:find("%f[%w]" .. forbidden .. "%f[%W]%s*[%.%[]") then
-            failures = failures + 1
-            print(string.format("FAIL  logic.lua 不得依賴 Factorio 全域,卻用了 %s",
-                forbidden))
-        end
-    end
+    eq(table.concat(find_factorio_globals(source), ","), "",
+        "src/logic.lua 不得依賴任何 Factorio 全域")
 end
 
 print(string.format("\n%d/%d 通過", total - failures, total))

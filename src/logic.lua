@@ -7,10 +7,10 @@
 -- 執行這條規則。
 local logic = {}
 
--- Factorio 2.0 是 16 方向,north=0,順時針每 22.5 度 +1。
+-- Factorio 2.0 的 defines.direction 是 16 方向,north=0,順時針每 22.5 度 +1。
 -- 角色行走只會產生 8 個偶數值,所以這裡只收偶數。
 -- 刻意寫成字面數字來保持這個檔案的純淨;control.lua 載入時會斷言引擎的
--- 方向編號與這份表一致,萬一未來引擎改了編號會立刻被抓到。
+-- defines 與這份表一致,萬一未來引擎改了編號會立刻被抓到。
 -- 注意 Factorio 的 y 軸向下,所以 north 是 y = -1。
 logic.DIRECTION_VECTORS = {
     [0]  = { x =  0, y = -1 }, -- north
