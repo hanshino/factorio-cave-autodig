@@ -30,6 +30,10 @@ cp src/info.json src/data.lua src/settings.lua src/control.lua src/logic.lua src
 # 所以沒有被上面那行帶進去,必須明確複製。官方文件建議 144x144,但 Portal 實際
 # 發送的縮圖資產是 288x288(遊戲內 200% UI scale 也吃得下),所以這裡放 288。
 cp src/thumbnail.png "build/$DIR/"
+# changelog.txt 放在 src/ 而不是 repo 根目錄:publish.sh 會把 zip 展開後跟 src/
+# 逐檔比對,放根目錄的檔案(像 LICENSE)每次都會被回報成「zip 多一個檔」而中止,
+# 得另外開一條排除規則。放進 src/ 就沒有這個問題。
+cp src/changelog.txt "build/$DIR/"
 # LICENSE 在 repo 根目錄,不在 src/ 底下,所以另外一行複製 —— publish.sh 送出的
 # license 欄位(default_gnulgplv3)只登記在 portal 頁面上,實際授權條文要跟著
 # 這個 zip 一起發布,不能只存在於 repo 裡沒人下載模組時看不到的地方。

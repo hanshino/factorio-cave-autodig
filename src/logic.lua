@@ -12,7 +12,7 @@ local logic = {}
 -- 哪個模式」各說各話,而且不會有任何錯誤訊息。
 -- 順序有意義:熱鍵是在這個清單裡循環,而 settings.lua 的 allowed_values
 -- 必須與這裡一致。
-logic.MODES = { "forward", "cursor" }
+logic.MODES = { "forward", "cursor", "clear" }
 
 -- Factorio 2.0 的 defines.direction 是 16 方向,north=0,順時針每 22.5 度 +1。
 -- 角色行走只會產生 8 個偶數值,所以這裡只收偶數。
@@ -137,6 +137,26 @@ function logic.blocked_reason(s)
         return "enemy"
     end
     return nil
+end
+
+-- 清除模式:在一批候選點裡挑離玩家最近的一個,回傳它在清單裡的索引。
+-- 用平方距離比較,省一次開根號,且不影響大小順序。points 為空回傳 nil。
+--
+-- 只回傳索引而不是座標本身,是因為呼叫端(control.lua)手上除了座標還有
+-- 對應的 LuaEntity 物件 —— 這個函式不該知道 Factorio 實體長什麼樣子,
+-- 純函式只管「哪個最近」,把索引對應回真正的實體是呼叫端的事。
+function logic.nearest_point(px, py, points)
+    if not points or #points == 0 then return nil end
+    local best_index, best_dist
+    for i, p in ipairs(points) do
+        local dx, dy = p.x - px, p.y - py
+        local dist = dx * dx + dy * dy
+        if not best_dist or dist < best_dist then
+            best_dist = dist
+            best_index = i
+        end
+    end
+    return best_index
 end
 
 return logic

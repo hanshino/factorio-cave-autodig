@@ -135,23 +135,10 @@ script.on_event("autodig-toggle", function(event)
     autodig_gui.refresh(player, s)
 end)
 
-script.on_event("autodig-cycle-mode", function(event)
-    local player = game.get_player(event.player_index)
-    if not player then return end
-    local s = state_for(event.player_index)
-    -- 在 logic.MODES 清單裡通用地往後移一格,而不是寫死兩個模式的翻轉 ——
-    -- 這樣以後加第三個模式,熱鍵自動就能循環到,不用回來改這裡。
-    local current_index = 1
-    for i, m in ipairs(logic.MODES) do
-        if m == s.mode then
-            current_index = i
-            break
-        end
-    end
-    s.mode = logic.MODES[(current_index % #logic.MODES) + 1]
-    player.print({ "autodig.mode-switched", mode_label(s.mode) })
-    autodig_gui.refresh(player, s)
-end)
+-- 原本這裡還有一個 autodig-cycle-mode 熱鍵(Shift+C),實機測試時跟伺服器上
+-- 其他啟用中的模組卡到了。切換模式本來就有 GUI 面板的下拉選單能做同一件事,
+-- 所以直接拿掉這個熱鍵,不另外挑一個新鍵位頂替 —— 面板是權威路徑,不需要
+-- 兩條路做同一件事。對應的 data.lua custom-input 定義也已移除。
 
 local COVER = { ["diggy-rock"] = true, ["diggy-rubble"] = true }
 
@@ -374,6 +361,43 @@ local function forward_target(player, s, width, include_rubble)
     return nil
 end
 
+-- 清除模式:在玩家 resource_reach_distance 範圍內找所有 cover 實體,挑距離
+-- 最近、且通過 can_reach_entity 的那一顆——不需要滑鼠指、也不需要對著牆走,
+-- 只要範圍內有構得到的石頭或碎石就自動清掉。
+--
+-- find_entities_filtered 的圓形範圍量的是「實體中心到查詢點」,can_reach_entity
+-- 量的是「碰撞箱最近的一點到角色」——README 記載的實機驗證顯示兩者在邊界附近
+-- 會差到 0.5~0.7 格(剛好是 diggy-rock 的碰撞箱半徑)。所以範圍查詢只用來
+-- 縮小候選集,真正「構不構得到」一律交給 can_reach_entity 判定,這樣清除模式
+-- 跟 cursor_target / forward_target 兩個模式共用同一條距離防線,不會自己另外
+-- 認定一個更寬鬆或更嚴格的範圍。
+-- resource_reach_distance 隨 the-cave 的採礦距離科技成長(開局約 3.2 格,滿級
+-- 約 23 格),完全比照玩家手動點擊的判定,不是這個模式自己另外設定的參數。
+-- player.position 在遠端視角下是攝影機位置,同 forward_target 的說明——
+-- can_reach_entity 一樣是相對角色量測,遠端視角時自然會把範圍內的東西都
+-- 判定為構不到,不需要額外處理。
+local function clear_target(player, include_rubble)
+    local reach = player.resource_reach_distance
+    if not reach or reach <= 0 then return nil end
+    local names = include_rubble and { "diggy-rock", "diggy-rubble" } or { "diggy-rock" }
+    local found = player.surface.find_entities_filtered({
+        position = player.position,
+        radius = reach,
+        name = names,
+    })
+    if #found == 0 then return nil end
+
+    local reachable, points = {}, {}
+    for _, entity in ipairs(found) do
+        if player.can_reach_entity(entity) then
+            reachable[#reachable + 1] = entity
+            points[#points + 1] = entity.position
+        end
+    end
+    local index = logic.nearest_point(player.position.x, player.position.y, points)
+    return index and reachable[index]
+end
+
 script.on_event(defines.events.on_tick, function()
     for player_index, s in pairs(storage.autodig.players) do
         if s.enabled then
@@ -404,6 +428,8 @@ script.on_event(defines.events.on_tick, function()
                     local target
                     if s.mode == "cursor" then
                         target = cursor_target(player, include_rubble)
+                    elseif s.mode == "clear" then
+                        target = clear_target(player, include_rubble)
                     else
                         target = forward_target(player, s,
                             user["autodig-tunnel-width"].value, include_rubble)

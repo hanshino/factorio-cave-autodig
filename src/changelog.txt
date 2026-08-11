@@ -1,0 +1,29 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 2026-08-01
+  Features:
+    - New "Auto-clear" dig mode: no pointing or walking required. Digs the nearest reachable
+      rock or rubble pile within your mining reach automatically, over and over. Reach is
+      exactly your character's own resource-reach-distance stat (same as manual mining and the
+      other two modes), so it grows with the same research and never exceeds what you could
+      already reach by hand. Select it from the GUI panel's mode dropdown or the
+      autodig-default-mode setting.
+---------------------------------------------------------------------------------------------------
+Version: 0.1.1
+Date: 2026-08-01
+  Changes:
+    - Removed the autodig-cycle-mode hotkey (Shift+C) — it conflicted with another enabled
+      mod's hotkey on the live server. Switching mode was never hotkey-only: use the GUI panel's
+      mode dropdown instead (open it with the toggle button or the autodig-toggle hotkey,
+      Shift+X, which is unaffected).
+  Locale:
+    - autodig-stress-margin's tooltip now notes that The Cave ships the collapse gate disabled
+      by default, so an admin who only reads the in-game tooltip still learns the gate is likely
+      inert out of the box.
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2026-07-27
+  Features:
+    - Initial release: cursor-mode and forward-mode auto-digging in The Cave, GUI control panel,
+      enemy-proximity safety gate, and an optional collapse-stress safety gate (only active when
+      The Cave's own the-cave-collapse-mode setting is enabled).
