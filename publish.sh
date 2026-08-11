@@ -9,12 +9,15 @@
 #   ./publish.sh --init --yes      # 真的首次發佈（只會成功一次）
 #   ./publish.sh --release --yes    # 上傳新版本（info.json 的 version 要先遞增）
 #   ./publish.sh --details --yes    # 只更新 Portal 上的標題／簡介／說明／標籤
+#   ./publish.sh --images          # 預覽要設定的 Portal gallery 圖片
+#   ./publish.sh --images --yes     # 上傳並設定 Portal gallery 圖片
 #
 # API key 取得：https://factorio.com/profile → 建立 API key，勾選需要的 usage：
 #   --init     需要  ModPortal: Publish Mods
 #   --release  需要  ModPortal: Upload Mods
 #   --details  需要  ModPortal: Edit Mods
-# 三個可以是同一把 key（勾三個 usage），也可以分開。
+#   --images   需要  ModPortal: Edit Mods
+# 四個可以是同一把 key（勾需要的 usage），也可以分開。
 #
 # key 從環境變數讀，不要寫進檔案也不要貼到聊天室：
 #   export FACTORIO_MOD_API_KEY=...
@@ -30,11 +33,12 @@ for a in "$@"; do
     --init)    MODE=init ;;
     --release) MODE=release ;;
     --details) MODE=details ;;
+    --images)  MODE=images ;;
     --yes)     CONFIRM=1 ;;
     *) echo "未知參數: $a"; exit 2 ;;
   esac
 done
-[ -z "$MODE" ] && { echo "要指定 --init / --release / --details 其中一個"; exit 2; }
+[ -z "$MODE" ] && { echo "要指定 --init / --release / --details / --images 其中一個"; exit 2; }
 
 NAME=$(jq -r '.name' src/info.json)
 VERSION=$(jq -r '.version' src/info.json)
@@ -56,6 +60,8 @@ LICENSE="default_gnulgplv3"       # 與 locale-mod 一致；條文見 repo 根�
 SOURCE_URL=""                     # 有 git repo 再填
 SUMMARY="Removes the repetitive clicking of manual digging in The Cave, without speeding anything up: mining speed, reach, and every dig's consequences are exactly the same as clicking it yourself."
 DESCRIPTION_FILE="portal-description.md"
+# 順序就是 Portal gallery 的顯示順序；可自行增列，但不要留空。
+GALLERY=("resources/portal-gallery.png")
 
 echo "模組名稱 : $NAME        （發佈後無法更名）"
 echo "顯示標題 : $TITLE"
@@ -66,7 +72,16 @@ echo "授權     : $LICENSE"
 echo "動作     : $MODE"
 echo
 
-if [ "$MODE" != "details" ]; then
+if [ "$MODE" = "images" ]; then
+  [ "${#GALLERY[@]}" -gt 0 ] || { echo "GALLERY 是空的；為避免意外清空 gallery，請至少列出一張圖片"; exit 1; }
+  echo "gallery 圖片（順序即 Portal 顯示順序）："
+  for image in "${GALLERY[@]}"; do
+    [ -f "$image" ] || { echo "找不到 gallery 圖片：$image"; exit 1; }
+    size=$(stat -c '%s' "$image")
+    echo "  $image（存在，${size} bytes）"
+  done
+  echo "警告：送出後 gallery 會變成正好這個清單，未列入的既有圖片會被移除。"
+elif [ "$MODE" != "details" ]; then
   [ -f "$ZIP" ] || { echo "找不到 $ZIP —— 先跑 ./package.sh"; exit 1; }
   # zip 內最外層資料夾必須正好等於 <name>_<version>
   # 用 awk 而非 head：head 會提早關閉管線讓 unzip 收到 SIGPIPE，在 pipefail 下會誤判失敗
@@ -176,6 +191,35 @@ case "$MODE" in
     [ -f "$DESCRIPTION_FILE" ] && ARGS+=(-F "description=<$DESCRIPTION_FILE")
     [ -n "$SOURCE_URL" ] && ARGS+=(-F "source_url=$SOURCE_URL")
     RESP=$(curl -sS -X POST -H "$AUTH" "${ARGS[@]}" "$API/edit_details")
+    if [ "$(printf '%s' "$RESP" | jqf success)" = "True" ]; then
+      echo "完成：https://mods.factorio.com/mod/$NAME"
+    else
+      echo "失敗：$RESP"; exit 1
+    fi
+    ;;
+
+  images)
+    echo "1/3 呼叫 $API/images/add ..."
+    IMAGE_IDS=()
+    for image in "${GALLERY[@]}"; do
+      RESP=$(curl -sS -X POST -H "$AUTH" -F "mod=$NAME" "$API/images/add")
+      UPLOAD_URL=$(printf '%s' "$RESP" | jqf upload_url)
+      if [ -z "$UPLOAD_URL" ]; then
+        echo "失敗：$RESP"; exit 1
+      fi
+
+      echo "2/3 上傳 $image ..."
+      RESP=$(curl -sS -X POST -F "image=@$image" "$UPLOAD_URL")
+      IMAGE_ID=$(printf '%s' "$RESP" | jqf id)
+      if [ -z "$IMAGE_ID" ]; then
+        echo "失敗：$RESP"; exit 1
+      fi
+      IMAGE_IDS+=("$IMAGE_ID")
+    done
+
+    IMAGE_LIST=$(IFS=,; printf '%s' "${IMAGE_IDS[*]}")
+    echo "3/3 設定 gallery ..."
+    RESP=$(curl -sS -X POST -H "$AUTH" -F "mod=$NAME" -F "images=$IMAGE_LIST" "$API/images/edit")
     if [ "$(printf '%s' "$RESP" | jqf success)" = "True" ]; then
       echo "完成：https://mods.factorio.com/mod/$NAME"
     else
