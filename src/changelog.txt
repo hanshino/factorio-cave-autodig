@@ -1,4 +1,27 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.1
+Date: 2026-08-11
+  Bugfixes:
+    - The very first dig of a run no longer happens a full cooldown earlier than manual mining
+      would allow. Digging now charges before it mines: the first time a target is seen it is
+      only recorded and a full mining cooldown is served, and the rock is mined on the next
+      eligible tick only if it is still the same target. This mirrors holding the mouse button
+      for mining_time before the rock breaks. Long-run rate was already correct; only the first
+      dig broke the "never faster than mining by hand" guarantee. Reported by The Cave's author.
+    - Side effect, recorded honestly rather than hidden: each rock now costs roughly one extra
+      tick, because charging for the next rock can only start on the tick after the previous one
+      was mined. That is about 0.5% slower than the theoretical manual rate. The error is in the
+      safe direction — auto-dig is never faster than hand mining.
+  Optimizations:
+    - Auto-clear mode now backs off for 15 ticks when it finds nothing to dig, instead of
+      rescanning every single tick. The scan is a find_entities_filtered over the character's
+      full resource-reach radius (about 23 tiles fully researched) plus a can_reach_entity call
+      per result, running once per enabled player per tick, so an idle player on a multiplayer
+      server was measurably wasting UPS. Cursor and forward modes are deliberately not backed
+      off: cursor reads player.selected with no world query at all, forward does at most three
+      radius-0.4 point queries, and adding latency to cursor mode would make "point at a rock and
+      it starts digging" feel sluggish. Reported by The Cave's author.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.0
 Date: 2026-08-01
   Features:

@@ -123,6 +123,108 @@ underestimates effective speed (auto-dig would be slower than manual mining), an
 error direction applies to any future combination where more than one modifier is active. Do
 not "simplify" this back to addition — it looks harmless and is wrong.
 
+## Charge-then-dig: why the first dig used to be free
+
+Until 0.2.1, `try_dig` called `player.mine_entity` **first** and only then set
+`s.next_tick = game.tick + cooldown`. Steady-state throughput was correct — one rock per
+cooldown forever — but the very first dig of a run happened immediately, with no wait at all.
+Manual mining is "hold the button for `mining_time` seconds, *then* the rock breaks", so the
+old order handed out one entire cooldown for free at the start. Reported by The Cave's author.
+
+This matters more than the arithmetic suggests. The mod's whole pitch (`portal-description.md`,
+and the opening of this README) is that it changes *nothing* about pace. A player who toggles
+auto-dig on and off repeatedly — which costs nothing, since `next_tick` is deliberately
+preserved across a toggle — was not exploiting anything, but the invariant as literally stated
+was false, and "it evens out over time" is not the guarantee that was made.
+
+The fix inverts the order into a **charge model**:
+
+1. Find a target. Build a stable key for it (see below).
+2. If that key is not the one already being charged, store it, set
+   `next_tick = game.tick + cooldown`, and **do not mine this round**.
+3. When the cooldown expires, find a target again *from scratch*.
+4. If it is still the same key, mine it and clear the charge. If it is a different key, start
+   charging the new target instead — i.e. a full fresh cooldown.
+
+Step 3 re-running the search (rather than caching the `LuaEntity` from step 1) is deliberate:
+the entity may have been mined by another player, destroyed by a collapse, or walked out of
+reach during the cooldown, and a stored `LuaEntity` would be stale or invalid. Re-searching
+also means the mode's own targeting rules (cursor's `player.selected`, forward's candidate
+ordering, clear's nearest-reachable) get the final say at the moment of the dig, not a
+cooldown earlier.
+
+**Target identity is a coordinate+name string, not `unit_number`.** `diggy-rock` is very
+likely a `simple-entity` prototype, and that class is not guaranteed to carry a `unit_number`
+at all — reading it can yield `nil`. A `nil` key would fail every comparison, so charging
+would never complete and *no rock would ever be mined*, with no error message anywhere. The
+key is therefore `logic.target_key(x, y, name)` → `"10,20,diggy-rock"`: The Cave pins cover
+entities to tile centers and they never move, so the key is stable for as long as the rock
+exists, and it is derived from synchronized entity state so every machine in a multiplayer
+game computes the same string. `string.format("%d")` is used rather than `..` concatenation
+because `math.floor` returns a float in Lua 5.2 and an integer in 5.3+, and the two do not
+`tostring` identically.
+
+**The known, accepted cost: about one extra tick per rock**, because charging for the next
+rock cannot begin until the tick after the previous one was mined. That is roughly 0.5% below
+the theoretical manual-mining rate. This is deliberately not hidden in the changelog: the error
+is in the safe direction, and "slightly slower than hand mining" is a far cheaper bug than
+"slightly faster", which is the one thing this mod promises never to be.
+
+**Charge state lifecycle** (`s.charging_key`, stored per-player alongside `next_tick` and
+`enemy_count`):
+
+- Set when charging starts; compared on the next eligible tick; cleared after a successful
+  mine, when the target disappears, and on every path that disables auto-dig (`stop()`, the
+  hotkey toggle, the GUI checkbox).
+- **Cleared on toggle — the opposite of `next_tick`, and both are correct.** `next_tick` is
+  deliberately *not* reset when auto-dig is switched on, because resetting it would make
+  double-tapping the hotkey a way to skip the cooldown. `charging_key` deliberately *is*
+  cleared, because *keeping* it would be that same exploit: a player standing still, aimed at
+  the same rock, would re-enable and find the charge already satisfied and mine instantly —
+  crediting a charge accumulated before the mod was switched off, however long ago. Both rules
+  point the same way: re-enabling must never be faster than leaving it on.
+- Missing on old saves (pre-0.2.1) reads as `nil`, which is exactly the safe default, so
+  `on_configuration_changed` deliberately does **not** backfill it — same reasoning as
+  `enemy_count`. Backfilling any string would risk a fabricated key matching a real target and
+  granting one un-charged dig.
+
+**Safety gates still run only at the moment of the mine**, not at charge start. Two reasons:
+pre-0.2.1 they only ran at mine time, so keeping that is not a regression; and a stress reading
+taken a full cooldown before the dig is stale by the time it matters. Checking at both points
+would double this mod's `remote.call` traffic into The Cave — an interface documented as the
+maintainer's private test hook (see below) — to buy only "find out one cooldown earlier that
+the dig would be blocked".
+
+## Why only clear mode backs off when idle
+
+`CLEAR_IDLE_RETRY_TICKS = 15` in `src/control.lua` applies to **auto-clear mode only**. Before
+0.2.1 nothing set a cooldown when no target was found, so a mode that found nothing simply
+re-ran its whole search on the very next tick, forever. The three modes' idle costs are orders
+of magnitude apart, which is why the backoff is not applied uniformly:
+
+| Mode | Cost of one fruitless scan |
+| --- | --- |
+| `cursor` | reads `player.selected` — **zero** world queries |
+| `forward` | at most 3 `find_entities_filtered` point queries at radius 0.4, and only after `walk_active` passes |
+| `clear` | one `find_entities_filtered` over the full `resource_reach_distance` radius (~23 tiles fully researched) **plus a `can_reach_entity` call per result** |
+
+Only the third is worth throttling, and on a multiplayer server it runs once per enabled player
+per tick — the author of The Cave reported it as wasted UPS. At 15 ticks (0.25s) an idle
+player's scan rate drops to 1/15 while the worst-case delay before a newly-in-range rock starts
+being dug is a quarter second, which is not perceptible.
+
+Adding the same backoff to `cursor` would be actively harmful: pointing at a rock and having it
+start digging is that mode's entire feel, and a quarter-second of lag on every re-aim is
+exactly the kind of sluggishness players notice. `forward` is cheap enough not to bother.
+
+**Why the backoff can never accelerate anything.** It is only reachable inside the branch where
+`logic.ready_to_dig` already returned `true` — that is, `game.tick >= s.next_tick` is already
+established and the cooldown has already expired. The value written is `game.tick + 15`, which
+is therefore necessarily `>= ` the old `s.next_tick`. The assignment can only ever push
+`next_tick` later, never earlier, no matter how the constant is tuned. Any future change that
+sets `next_tick` outside a `ready_to_dig`-gated branch loses this property and must re-derive
+its own argument.
+
 ## `logic.lua` / `control.lua` layering, and the zero-Factorio-dependency test
 
 `src/logic.lua` contains every decision function (direction math, forward-candidate ordering,
@@ -136,8 +238,15 @@ The reason this split exists: **a headless Factorio server has no player charact
 exercised outside a real client at all — there is no way to unit-test them. Pulling every
 decision that doesn't need those things out into a dependency-free module means that logic can
 run under a plain Lua interpreter (`test/run.sh` runs it in `nickblah/lua:5.2` — no Factorio
-engine involved) with a real, fast unit test suite (94 assertions as of this task), instead of
+engine involved) with a real, fast unit test suite (117 assertions as of 0.2.1), instead of
 being untestable until someone plays the game.
+
+The charge model added in 0.2.1 was pushed into `logic.lua` for exactly this reason:
+`target_key`, `charge_action`, and `idle_retry_ticks` are all decisions that need no world
+access, so the "is this still the same rock?" comparison and the per-mode backoff policy are
+unit-tested rather than only reachable by playing. `control.lua` keeps what genuinely needs the
+engine — reading `entity.position`/`entity.name`, storing `s.charging_key`, and setting
+`s.next_tick`.
 
 This boundary is enforced as a test, not just a convention: the last block of
 `test/test_logic.lua` strips comments out of `src/logic.lua`'s own source and scans it for the

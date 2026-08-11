@@ -222,9 +222,59 @@ eq(blocked{ stress = 3.5, enemy_count = 1 }, "stress", "壓力優先於敵人回
 -- ── MODES ─────────────────────────────────────────────────────────────
 -- 這份清單是 control.lua 與 gui.lua 的共同來源,也必須與 settings.lua 的
 -- allowed_values 一致。把它釘住,免得有人改了其中一邊。
-eq(#logic.MODES, 2, "目前只有兩種模式")
+eq(#logic.MODES, 3, "目前有三種模式(0.2.0 加入 clear)")
 eq(logic.MODES[1], "forward", "第一個模式是 forward(settings.lua 的預設值仍是 cursor,較容易上手,與是否已實作無關)")
 eq(logic.MODES[2], "cursor", "第二個模式是 cursor")
+eq(logic.MODES[3], "clear", "第三個模式是 clear")
+
+-- ── target_key ────────────────────────────────────────────────────────
+-- 蓄力模型用這個鍵判斷「冷卻期間目標有沒有換掉」。刻意不用 unit_number:
+-- diggy-rock 很可能是 simple-entity,那類原型不保證有 unit_number。
+eq(logic.target_key(10, 20, "diggy-rock"), "10,20,diggy-rock", "基本鍵格式")
+eq(logic.target_key(10.5, 20.5, "diggy-rock"), "10,20,diggy-rock",
+    "座標整數化:the-cave 把 cover 放在格子中心,同一顆石頭必須產生同一個鍵")
+eq(logic.target_key(10.9, 20.9, "diggy-rock"), "10,20,diggy-rock",
+    "整數化是 floor 不是四捨五入,格內任何一點都對到同一格")
+eq(logic.target_key(-3.5, -7.5, "diggy-rock"), "-4,-8,diggy-rock",
+    "負座標也用 floor(往負無窮),不是往零截斷 —— 洞穴會往負座標挖")
+eq(logic.target_key(10, 20, "diggy-rubble"), "10,20,diggy-rubble",
+    "名稱是鍵的一部分:同一格上岩石換成碎石要算不同目標")
+-- 同一格的不同實體不能碰撞成同一個鍵,否則蓄力會被誤判為已滿。
+eq(logic.target_key(10, 20, "diggy-rock") == logic.target_key(10, 20, "diggy-rubble"),
+    false, "同格不同名產生不同鍵")
+eq(logic.target_key(10, 20, "diggy-rock") == logic.target_key(11, 20, "diggy-rock"),
+    false, "不同格產生不同鍵")
+-- 壞輸入回傳 nil,而不是產生一個看起來合法的鍵。charge_action 收到 nil 目標鍵
+-- 會回傳 nil(什麼都不做),這比「憑空生出一個可能相符的鍵」安全。
+eq(logic.target_key(nil, 20, "diggy-rock"), nil, "x 為 nil 回傳 nil")
+eq(logic.target_key(10, nil, "diggy-rock"), nil, "y 為 nil 回傳 nil")
+eq(logic.target_key(10, 20, nil), nil, "名稱為 nil 回傳 nil")
+eq(logic.target_key(10, 20, 5), nil, "名稱非字串回傳 nil")
+
+-- ── charge_action ─────────────────────────────────────────────────────
+-- 「先蓄力再挖」:第一次看到目標只記下來並等一個完整冷卻,冷卻到期後仍是
+-- 同一個目標才真的挖。這樣自動挖掘的第一下不會比手挖快一個冷卻。
+eq(logic.charge_action(nil, "10,20,diggy-rock"), "charge",
+    "第一次看到目標:開始蓄力,這一輪不挖")
+eq(logic.charge_action("10,20,diggy-rock", "10,20,diggy-rock"), "dig",
+    "冷卻到期後仍是同一個目標:蓄力已滿,可以挖")
+eq(logic.charge_action("10,20,diggy-rock", "11,20,diggy-rock"), "charge",
+    "目標換了就對新目標重新蓄力,不能沿用舊目標的蓄力")
+eq(logic.charge_action("10,20,diggy-rock", "10,20,diggy-rubble"), "charge",
+    "同一格但實體換了也算換目標")
+eq(logic.charge_action(nil, nil), nil, "沒有目標就什麼都不做")
+eq(logic.charge_action("10,20,diggy-rock", nil), nil,
+    "蓄力中但目標消失:回傳 nil,呼叫端負責清掉蓄力")
+
+-- ── idle_retry_ticks ──────────────────────────────────────────────────
+-- 只有 clear 模式空轉時退避。cursor 只讀 player.selected(零世界查詢),
+-- forward 最多 3 次半徑 0.4 的點查詢,兩者都便宜到不值得退避;而且 cursor
+-- 加延遲會讓「指著石頭就開挖」的手感變鈍。
+eq(logic.idle_retry_ticks("clear", 15), 15, "clear 模式空轉時退避")
+eq(logic.idle_retry_ticks("cursor", 15), nil, "cursor 模式不退避(手感優先且成本近乎零)")
+eq(logic.idle_retry_ticks("forward", 15), nil, "forward 模式不退避(最多 3 次點查詢)")
+eq(logic.idle_retry_ticks(nil, 15), nil, "模式為 nil 時不退避")
+eq(logic.idle_retry_ticks("clear", 30), 30, "退避長度由呼叫端的常數決定,不寫死在這裡")
 
 -- ── logic.lua 必須零 Factorio 依賴 ────────────────────────────────────
 -- 這個檔案的存在理由就是「可以在 Factorio 外面測」。一旦有人在裡面用了 game

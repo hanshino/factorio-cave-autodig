@@ -46,6 +46,10 @@ local function state_for(player_index)
             -- nil 是有意義的哨兵,代表「還沒有基準」,不是省略初始值。
             -- 見 blocked_reason 和 try_dig 裡對這個欄位的說明。
             enemy_count = nil,
+            -- 正在蓄力的目標鍵(logic.target_key 產生的字串)。nil 同樣是有意義
+            -- 的哨兵,代表「目前沒有在對任何目標蓄力」——下一個 eligible tick
+            -- 會重新開始蓄力。見 on_tick 裡的蓄力流程與 clear_charge。
+            charging_key = nil,
         }
         players[player_index] = s
     end
@@ -77,6 +81,12 @@ script.on_configuration_changed(function(event)
         -- 補成 0 會把哨兵變成「基準是 0 隻敵人」,於是玩家旁邊本來就有怪的時候,
         -- 下一次挖掘會誤判成敵人增加而自我關閉。舊存檔缺這個欄位時讀到 nil,
         -- 那正好就是安全的預設值。
+        --
+        -- charging_key 同理,也刻意「不」補值。nil 代表「沒有在對任何目標蓄力」,
+        -- 0.2.1 之前的存檔完全沒有這個欄位,讀到的就是 nil —— 那正好是安全的
+        -- 預設值:升級後的第一個 eligible tick 會重新開始蓄力,也就是舊存檔裡
+        -- 正在挖的那顆石頭會多等一個冷卻,而不會少等。補成任何字串都會讓一個
+        -- 憑空捏造的鍵有機會跟真實目標相符,等於送出一次免費的、沒蓄力過的挖掘。
     end
 
     -- 只有這個 mod 自己的版本變了,才重新解除兩個警告旗標 —— 別的 mod 更新
@@ -115,15 +125,37 @@ local function mode_label(mode)
     return { "autodig.mode-" .. mode }
 end
 
+-- 停用自動挖掘時清掉蓄力進度。不清的話,重新開啟後手上會留著一個過期的鍵:
+-- 如果玩家剛好還站在原地對著同一顆石頭,第一輪比對就會直接相符而立刻開挖 ——
+-- 那顆石頭的蓄力其實是關閉之前累積的,中間隔了多久都不算數,等於免費送出
+-- 一次沒有蓄力的挖掘。清成 nil 之後,重新開啟一律從蓄力第一步開始。
+--
+-- 注意這跟 next_tick 是相反的處理,而且兩者都是對的:next_tick 在 toggle 時
+-- 刻意「不」歸零(見 autodig-toggle 裡的說明),因為歸零會讓連按熱鍵變成繞過
+-- 冷卻的捷徑;charging_key 則是刻意歸零,因為留著它才是那個捷徑。兩條規則
+-- 指向同一個方向:重新開啟絕不能比持續開著更快。
+--
+-- 定義位置很要緊:這個函式必須宣告在「所有呼叫點之前」。Lua 的 local 只在
+-- 宣告之後的程式碼裡可見,寫在後面的話,前面那些呼叫會被編譯成 global 查找,
+-- 執行時拿到 nil 而直接崩潰 —— 而且是靜態分析看不出來、只有真的按下熱鍵才
+-- 會炸的那種。最早的呼叫點就在下面的 autodig-toggle,所以定義放在這裡。
+local function clear_charge(s)
+    s.charging_key = nil
+end
+
 script.on_event("autodig-toggle", function(event)
     local player = game.get_player(event.player_index)
     if not player then return end
     local s = state_for(event.player_index)
     s.enabled = not s.enabled
+    -- 開或關都要清蓄力:關掉是為了不留過期的鍵,開啟則是因為玩家可能是用
+    -- GUI 勾選框關掉再用熱鍵開回來,兩條路徑都必須從蓄力第一步開始。
+    clear_charge(s)
     if s.enabled then
         -- next_tick 刻意不歸零。歸零等於允許連按兩次熱鍵就把冷卻繞過去,
         -- 立刻再挖一次 —— 這是對「等同手挖速度」這個核心約束的直接違反。
         -- 停用期間保留的 next_tick 本來就正確地跨過關閉/開啟這個循環。
+        -- (charging_key 相反地一定要清,理由見 clear_charge 上方的說明。)
         s.last_walk_tick = nil
         -- 開啟當下先記住現場的敵人數,否則第一次掃描會把「本來就在旁邊的怪」
         -- 誤判成新增而立刻自我關閉。
@@ -148,6 +180,17 @@ local COVER = { ["diggy-rock"] = true, ["diggy-rubble"] = true }
 -- 放開方向鍵之後,自動挖掘要在半秒內停下來,不能無限期黏著最後一個方向挖。
 local WALK_GRACE_TICKS = 30
 
+-- clear 模式找不到目標時的退避。範圍查詢是三個模式裡唯一昂貴的那一個(見
+-- logic.idle_retry_ticks 的完整說明),空手而回時等這麼多 tick 再掃一次。
+-- 15 tick = 0.25 秒:玩家走進一顆新石頭的射程時,最壞情況多等四分之一秒才開挖,
+-- 感覺不出來;但每個空轉玩家的掃描次數直接砍成 1/15。
+--
+-- 安全性:這個退避「只可能把 next_tick 往後推,不可能提前」。理由是它只在
+-- logic.ready_to_dig 已經回傳 true 的分支裡設定 —— 也就是 game.tick >=
+-- s.next_tick 已經成立、冷卻早就到期了,而寫進去的值是 game.tick + 15,必然
+-- 大於等於原本的 s.next_tick。所以無論退避怎麼調,都不可能變成繞過冷卻的捷徑。
+local CLEAR_IDLE_RETRY_TICKS = 15
+
 local ENEMY_SCAN_RADIUS = 15
 -- 壓力探針的取樣半框。max_in_area 內部以 step 2 掃 cell,所以 ±4 是 5x5 = 25
 -- 個 cell。以每 3 秒一次的挖掘節奏計成本可忽略;真的量到偏重就縮成 ±2。
@@ -158,6 +201,7 @@ local STRESS_PROBE_HALF = 4
 -- 但其實已經停了。
 local function stop(player, s, reason_key, ...)
     s.enabled = false
+    clear_charge(s)
     player.print({ reason_key, ... })
     autodig_gui.refresh(player, s)
 end
@@ -245,11 +289,16 @@ local function warn_collapse_setting_missing_once()
     game.print({ "autodig.collapse-setting-missing" })
 end
 
--- 真正動手,成功時會在函式內自己設定冷卻(不是靠呼叫端)。回傳 true 表示挖成功。
+-- 真正動手。呼叫端只在「這個目標的蓄力已經滿了」時才呼叫這裡(見 on_tick 的
+-- 蓄力流程),所以進到這個函式就代表一個完整的冷卻已經走完了。回傳 true 表示
+-- 挖成功。
+--
+-- 安全閘(壓力、敵人)刻意只在這裡評估,蓄力開始時「不」另外檢查一次。兩個
+-- 理由:(1) 0.2.1 之前本來就只在挖掘的這一刻檢查,維持原樣不算退步,而蓄力
+-- 開始時的世界狀態離真正的挖掘還有一整個冷卻,那一刻的讀數本來就會過期;
+-- (2) 壓力探針是一次跨 mod 的 remote.call,蓄力時再檢查一次等於把這個 mod
+-- 對 the-cave 的呼叫成本直接加倍,而換到的只是「早一個冷卻知道會被擋」。
 local function try_dig(player, s, entity)
-    local cooldown = cooldown_for(player, entity.name)
-    if not cooldown then return false end
-
     local position = entity.position
     local x, y = math.floor(position.x), math.floor(position.y)
     local user = settings.get_player_settings(player)
@@ -307,7 +356,11 @@ local function try_dig(player, s, entity)
         stop(player, s, "autodig.stopped-inventory")
         return false
     end
-    s.next_tick = game.tick + cooldown
+    -- 挖掉了,蓄力狀態隨之作廢:這個鍵對應的實體已經不存在,留著只會在下一輪
+    -- 跟新目標比對失敗(無害但沒有意義)。真正重要的是「不在這裡設 next_tick」——
+    -- 冷卻是在蓄力開始時就付掉的,這裡再付一次等於每顆石頭要兩個冷卻,直接把
+    -- 速度砍半。下一顆石頭的冷卻由它自己的蓄力起點負責。
+    clear_charge(s)
     return true
 end
 
@@ -434,7 +487,36 @@ script.on_event(defines.events.on_tick, function()
                         target = forward_target(player, s,
                             user["autodig-tunnel-width"].value, include_rubble)
                     end
-                    if target then try_dig(player, s, target) end
+
+                    -- 「先蓄力再挖」。手動挖掘是按住 mining_time 秒之後石頭才碎,
+                    -- 所以自動挖掘也必須先付一個完整冷卻才准動手 —— 舊版是先挖再
+                    -- 等冷卻,第一下等於白拿一個冷卻的時間。詳見 logic.charge_action。
+                    local key = target and
+                        logic.target_key(target.position.x, target.position.y, target.name)
+                    local action = logic.charge_action(s.charging_key, key)
+
+                    if action == "dig" then
+                        try_dig(player, s, target)
+                    elseif action == "charge" then
+                        -- 開始對這個目標蓄力:記下鍵、推一個完整冷卻,這一輪不挖。
+                        -- cooldown_for 拿不到值(原型不可採礦)時什麼都不做,也不
+                        -- 記蓄力 —— 這是舊版 try_dig 開頭那道 `if not cooldown`
+                        -- 防線搬過來的位置,現在它擋在更前面,連蓄力都不會開始。
+                        local cooldown = cooldown_for(player, target.name)
+                        if cooldown then
+                            s.charging_key = key
+                            s.next_tick = game.tick + cooldown
+                        end
+                    else
+                        -- 沒有目標。手上如果還留著蓄力,現在就作廢:目標消失了
+                        -- (被別人挖掉、玩家走開、滑鼠移開),再回來時要從頭蓄。
+                        clear_charge(s)
+                        -- clear 模式的空轉退避。只有這個模式退避,理由見
+                        -- logic.idle_retry_ticks;只會把 next_tick 往後推、
+                        -- 不可能提前,理由見 CLEAR_IDLE_RETRY_TICKS。
+                        local retry = logic.idle_retry_ticks(s.mode, CLEAR_IDLE_RETRY_TICKS)
+                        if retry then s.next_tick = game.tick + retry end
+                    end
                 end
             end
         end
@@ -469,6 +551,8 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(event)
     local was_enabled = s.enabled
     local handled, power_changed = autodig_gui.on_checkbox(player, s, event.element)
     if power_changed then
+        -- 與熱鍵一樣,開關兩個方向都清蓄力,理由見 clear_charge 上方的說明。
+        clear_charge(s)
         if s.enabled and not was_enabled then
             -- 與熱鍵開啟時完全相同的重置(next_tick 刻意不歸零,理由同熱鍵)。
             s.last_walk_tick = nil
