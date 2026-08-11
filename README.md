@@ -1,5 +1,7 @@
 # hanshino-cave-autodig
 
+![The Cave Auto-Dig — a lit tunnel driven into the cave wall](resources/github-banner.png)
+
 Automates digging in [The Cave](https://mods.factorio.com/mod/the-cave) at exactly manual
 speed. This document exists so the next person (possibly future-you) does not have to
 re-derive the dead ends this project already walked into. Read it before changing anything,

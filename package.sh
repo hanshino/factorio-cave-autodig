@@ -26,6 +26,10 @@ mkdir -p "build/$DIR" dist
 # 白名單複製,不用 cp -r。locale-mod 有過把工具的暫存目錄掃進 zip 差點發布出去
 # 的紀錄,所以這裡明確列出要帶什麼。
 cp src/info.json src/data.lua src/settings.lua src/control.lua src/logic.lua src/gui.lua "build/$DIR/"
+# thumbnail.png 是 zip 內由遊戲和 Portal 辨識的獨立檔案,不是 info.json 的欄位,
+# 所以沒有被上面那行帶進去,必須明確複製。官方文件建議 144x144,但 Portal 實際
+# 發送的縮圖資產是 288x288(遊戲內 200% UI scale 也吃得下),所以這裡放 288。
+cp src/thumbnail.png "build/$DIR/"
 # LICENSE 在 repo 根目錄,不在 src/ 底下,所以另外一行複製 —— publish.sh 送出的
 # license 欄位(default_gnulgplv3)只登記在 portal 頁面上,實際授權條文要跟著
 # 這個 zip 一起發布,不能只存在於 repo 裡沒人下載模組時看不到的地方。
