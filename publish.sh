@@ -80,14 +80,30 @@ if [ "$MODE" != "details" ]; then
   # 「文案跟現實不符」問題的另一種樣子：發布的不是剛剛看過、審過的東西。
   # 把 zip 展開後跟 src/ 逐檔比對內容，發現任何差異就中止，請人重新跑
   # ./package.sh 再重新上傳 —— 不要自己猜測或略過差異。
+  #
+  # LICENSE 從這個 diff 裡排除，另外用 cmp 單獨比對：package.sh 是從 repo
+  # 根目錄（不是 src/）把它複製進 zip 的，所以它天生就不會出現在 src/ 裡 ——
+  # 對 src 跟展開後的 zip 做逐檔 diff，一定會在每一次執行都回報「zip 多了
+  # LICENSE」而中止，即使 zip 剛用 package.sh 打包出來、內容完全正確也一樣
+  # （這個 bug 在上一波真的發生過，被下一輪審查抓到）。排除它不代表不檢查：
+  # cmp 逐位元組比對 zip 裡的 LICENSE 跟 repo 根目錄那份是否一致，一樣能抓到
+  # 內容被竄改、或 package.sh 忘記把它複製進去這兩種情況。
   DIFFDIR=$(mktemp -d)
   trap 'rm -rf "$DIFFDIR"' EXIT
   unzip -q "$ZIP" -d "$DIFFDIR"
-  if ! diff -rq "$DIFFDIR/$TOP" src; then
-    echo "!! zip 內容跟目前的 src/ 不一致（差異見上面）—— 請重新執行 ./package.sh 再重新上傳"
+  ZIP_OK=1
+  if ! diff -rq -x LICENSE "$DIFFDIR/$TOP" src; then
+    ZIP_OK=0
+  fi
+  if ! cmp -s "$DIFFDIR/$TOP/LICENSE" LICENSE; then
+    echo "!! zip 裡的 LICENSE 跟 repo 根目錄的 LICENSE 不一致（或 zip 裡沒有這個檔案）"
+    ZIP_OK=0
+  fi
+  if [ "$ZIP_OK" != "1" ]; then
+    echo "!! zip 內容跟目前的 src/ 或 LICENSE 不一致（差異見上面）—— 請重新執行 ./package.sh 再重新上傳"
     exit 1
   fi
-  echo "zip 內容檢查通過（與 src/ 完全一致）"
+  echo "zip 內容檢查通過（與 src/ + LICENSE 完全一致）"
 fi
 
 if [ "$CONFIRM" != "1" ]; then
